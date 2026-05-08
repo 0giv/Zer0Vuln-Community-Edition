@@ -1,0 +1,28 @@
+target_dirs:
+  linux:
+    - /etc
+    - /var/www
+    - /home
+  windows:
+    - "C:\\Users"
+
+exclude_dirs:
+  linux:
+    - /proc
+    - /sys
+    - /dev
+    - /var/lib/docker
+    - /run
+  windows: []
+
+backup_extensions:
+  - sql.gz
+  - tar.gz
+  - sql
+  - tar
+  - zip
+
+config_regexes:
+  - "wp-config\\.php"
+  - "\\.htaccess"
+  - ".*\\.conf$"

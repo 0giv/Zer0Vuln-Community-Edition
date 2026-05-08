@@ -1,0 +1,15 @@
+PyYAML
+systemd; platform_system == 'Linux'
+cysystemd; platform_system == 'Linux'
+psutil
+pandas
+requests
+psycopg2-binary
+sanic
+sanic-cors
+cryptography
+pywin32; platform_system == 'Windows'
+docker
+watchdog
+mss
+Pillow

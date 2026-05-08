@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.eslintcache
+frontend/node_modules/
+frontend/dist/
+
+# AI Models & Data (CRITICAL)
+ollama/
+models/
+*.gguf
+*.bin
+*.model
+*.onnx
+
+# Databases
+mysql_data/
+*.sqlite
+*.db
+
+# Logs & Temp
+*.log
+tmp/
+temp/
+Zer0Vuln_Source/
+Zer0Vuln_Source_*/
+
+# OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local AI tooling (Claude Code / agents — never commit)
+.agent/
+.claude/
+
+# Secrets / runtime keys (NEVER commit)
+.env
+data/fernet.key
+data/
+
+# Zer0Vuln Specific

@@ -1,0 +1,206 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: zer0vuln-db
+    restart: always
+    command: [ "--max_connections=500", "--wait_timeout=120", "--interactive_timeout=120" ]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-my-secret-pw}
+    ports:
+      - "3307:3306"
+    volumes:
+      - ./init_userdb.sql:/docker-entrypoint-initdb.d/1-init_userdb.sql
+      - ./init.sql:/docker-entrypoint-initdb.d/2-init.sql
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin ping -h localhost -u root -p$${DB_PASSWORD:-my-secret-pw}" ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: zer0vuln-ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  ollama-init:
+    image: curlimages/curl:8.12.1
+    container_name: zer0vuln-ollama-init
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: [ "/bin/sh", "-c" ]
+    command: |
+      echo "Waiting for Ollama API to be healthy..."
+      echo "Pulling model llama3.2:3b..."
+      curl -v -fsS http://ollama:11434/api/pull \
+        -H "Content-Type: application/json" \
+        -d '{"model":"llama3.2:3b","stream":false}'
+      echo "Model pull completed."
+
+  app:
+    build: .
+    container_name: zer0vuln-server
+    restart: always
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434/api
+      OLLAMA_MODEL: llama3.2:3b
+      WORKERS: 1
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    volumes:
+      - /:/host_disk:ro
+
+  ingest:
+    build: .
+    container_name: zer0vuln-ingest
+    restart: always
+    command: [ "python", "server.py" ]
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434/api
+      OLLAMA_MODEL: llama3.2:3b
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    ports:
+      - "5001:5001"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: zer0vuln-rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  ai-worker-automation:
+    build: .
+    container_name: zer0vuln-ai-worker-automation
+    restart: always
+    command: [ "python", "ai_worker.py" ]
+    env_file:
+      - .env
+    environment:
+      - WORKER_TYPE=automation
+      - OLLAMA_BASE_URL=http://ollama:11434/api
+      - OLLAMA_MODEL=llama3.2:3b
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq/
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
+
+  ai-worker-manual:
+    build: .
+    container_name: zer0vuln-ai-worker-manual
+    restart: always
+    command: [ "python", "ai_worker.py" ]
+    env_file:
+      - .env
+    environment:
+      - WORKER_TYPE=manual
+      - OLLAMA_BASE_URL=http://ollama:11434/api
+      - OLLAMA_MODEL=llama3.2:3b
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq/
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
+
+  ai-worker-defensive:
+    build: .
+    container_name: zer0vuln-ai-worker-defensive
+    restart: always
+    command: [ "python", "ai_worker.py" ]
+    env_file:
+      - .env
+    environment:
+      - WORKER_TYPE=defensive
+      - OLLAMA_BASE_URL=http://ollama:11434/api
+      - OLLAMA_MODEL=llama3.2:3b
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq/
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
+
+  opensearch:
+    image: opensearchproject/opensearch:2.12.0
+    container_name: zer0vuln-opensearch
+    restart: always
+    environment:
+      - cluster.name=zer0vuln-cluster
+      - node.name=zer0vuln-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.12.0
+    container_name: zer0vuln-dashboards
+    restart: always
+    ports:
+      - "5601:5601"
+    environment:
+      - 'OPENSEARCH_HOSTS=["http://opensearch:9200"]'
+      - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"
+    depends_on:
+      - opensearch
+
+volumes:
+  mysql_data:
+  opensearch_data:

@@ -1,0 +1,248 @@
+log_paths:
+  debian:
+    # Web sunucuları (Apache / Nginx)
+    - /var/log/apache2/error.log
+    - /var/log/apache2/access.log
+    - /var/log/apache2/other_vhosts_access.log
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+
+    # WAF / reverse proxy
+    - /var/log/apache2/modsec_audit.log
+    - /var/log/modsec_audit.log
+    - /var/log/haproxy.log
+    - /var/log/traefik/traefik.log
+
+    # Sistem / kernel / daemon
+    - /var/log/syslog
+    - /var/log/kern.log
+    - /var/log/daemon.log
+    - /var/log/dmesg
+    - /var/log/boot.log
+    - /var/log/user.log
+
+    # Auth / secure / login denemeleri
+    - /var/log/auth.log
+    - /var/log/faillog
+    - /var/log/sudo.log
+
+    # Paket yönetimi / update
+    - /var/log/dpkg.log
+    - /var/log/apt/history.log
+    - /var/log/apt/term.log
+
+    # Cron / zamanlanmış işler
+    - /var/log/cron.log
+    - /var/log/atop/atop.log
+
+    # Mail
+    - /var/log/mail.log
+    - /var/log/mail.err
+    - /var/log/exim4/mainlog
+    - /var/log/exim4/rejectlog
+    - /var/log/postfix/mail.log
+    - /var/log/postfix/smtp.log
+
+    # Güvenlik / firewall / IDS
+    - /var/log/audit/audit.log
+    - /var/log/fail2ban.log
+    - /var/log/ufw.log
+    - /var/log/snort/alert
+    - /var/log/suricata/suricata.log
+
+    # AD / LDAP / Kerberos entegrasyon
+    - /var/log/sssd/sssd.log
+    - /var/log/sssd/sssd_pam.log
+    - /var/log/krb5kdc.log
+
+    # VPN / IPSec
+    - /var/log/ipsec.log
+    - /var/log/strongswan.log
+    - /var/log/charon.log
+
+    # DB (MySQL / MariaDB / PostgreSQL)
+    - /var/log/mysql/error.log
+    - /var/log/mysql/mysql.log
+    - /var/log/mariadb/mariadb.log
+    - /var/log/postgresql/postgresql-11-main.log
+    - /var/log/postgresql/postgresql-12-main.log
+    - /var/log/postgresql/postgresql-13-main.log
+    - /var/log/postgresql/postgresql-14-main.log
+
+    # Docker / container runtime vs.
+    - /var/log/docker.log
+
+    # Samba / NFS / diğer servisler
+    - /var/log/samba/log.smbd
+    - /var/log/samba/log.nmbd
+    - /var/log/redis/redis-server.log
+    - /var/log/openvpn.log
+    - /var/log/openvpn/status.log
+
+  rhel:
+    # Web sunucuları
+    - /var/log/httpd/access_log
+    - /var/log/httpd/error_log
+    - /var/log/httpd/ssl_access_log
+    - /var/log/httpd/ssl_error_log
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+
+    # WAF / reverse proxy
+    - /var/log/httpd/modsec_audit.log
+    - /var/log/haproxy.log
+    - /var/log/traefik/traefik.log
+
+    # Sistem / kernel
+    - /var/log/messages
+    - /var/log/secure
+    - /var/log/maillog
+    - /var/log/boot.log
+    - /var/log/cron
+    - /var/log/dmesg
+    - /var/log/spooler
+
+    # Audit / tuning / package
+    - /var/log/audit/audit.log
+    - /var/log/tuned/tuned.log
+    - /var/log/yum.log
+    - /var/log/dnf.log
+
+    # AD / LDAP / Kerberos entegrasyon
+    - /var/log/sssd/sssd.log
+    - /var/log/sssd/sssd_pam.log
+    - /var/log/krb5kdc.log
+
+    # VPN / IPSec
+    - /var/log/ipsec.log
+    - /var/log/strongswan.log
+    - /var/log/charon.log
+
+    # DB
+    - /var/log/mysqld.log
+    - /var/log/mysql/mysqld.log
+    - /var/log/mariadb/mariadb.log
+    - /var/log/postgresql/postgresql.log
+    - /var/lib/pgsql/data/log/postgresql.log
+
+    # Fail2ban / IDS / firewall
+    - /var/log/fail2ban.log
+    - /var/log/firewalld
+    - /var/log/snort/alert
+    - /var/log/suricata/suricata.log
+
+    # Samba / NFS / servis
+    - /var/log/samba/log.smbd
+    - /var/log/samba/log.nmbd
+    - /var/log/nfs
+    - /var/log/chrony/chronyd.log
+
+    # Docker / container
+    - /var/log/docker.log
+
+  default:
+    # Genel Linux fallback – daha generic yollar
+    - /var/log/syslog
+    - /var/log/messages
+    - /var/log/auth.log
+    - /var/log/secure
+    - /var/log/kern.log
+    - /var/log/daemon.log
+    - /var/log/boot.log
+    - /var/log/cron
+    - /var/log/maillog
+    - /var/log/dmesg
+    - /var/log/audit/audit.log
+
+    # Web
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+    - /var/log/httpd/access_log
+    - /var/log/httpd/error_log
+
+    # WAF / reverse proxy
+    - /var/log/apache2/modsec_audit.log
+    - /var/log/modsec_audit.log
+    - /var/log/haproxy.log
+    - /var/log/traefik/traefik.log
+
+    # DB
+    - /var/log/mysql/error.log
+    - /var/log/mysql/mysql.log
+    - /var/log/mysqld.log
+    - /var/log/postgresql/postgresql.log
+
+    # Güvenlik / IDS
+    - /var/log/fail2ban.log
+    - /var/log/ufw.log
+    - /var/log/snort/alert
+    - /var/log/suricata/suricata.log
+
+    # AD / LDAP / Kerberos entegrasyon
+    - /var/log/sssd/sssd.log
+    - /var/log/sssd/sssd_pam.log
+    - /var/log/krb5kdc.log
+
+    # VPN / IPSec
+    - /var/log/openvpn.log
+    - /var/log/ipsec.log
+    - /var/log/strongswan.log
+    - /var/log/charon.log
+
+    # Diğer yaygın servisler
+    - /var/log/samba/log.smbd
+    - /var/log/samba/log.nmbd
+    - /var/log/redis/redis-server.log
+
+windows_log_types:
+  # Ana klasikler
+  - Security
+  - System
+  - Application
+  - Setup
+  - ForwardedEvents
+
+  # PowerShell / komut execution
+  - Windows PowerShell
+  - Microsoft-Windows-PowerShell/Operational
+  - Microsoft-Windows-CommandProcessor/Operational
+
+  # Task Scheduler
+  - Microsoft-Windows-TaskScheduler/Operational
+
+  # Defender / AV / Firewall
+  - Microsoft-Windows-Windows Defender/Operational
+  - Microsoft-Windows-Windows Firewall With Advanced Security/Firewall
+  - Microsoft-Windows-Security-Mitigations/KernelMode
+  - Microsoft-Windows-Sense/Operational
+
+  # Sysmon (kuruluysa)
+  - Microsoft-Windows-Sysmon/Operational
+
+  # Logon / RDP / Terminal Services
+  - Microsoft-Windows-TerminalServices-LocalSessionManager/Operational
+  - Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational
+  - Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational
+
+  # SMB / File server
+  - Microsoft-Windows-SMBServer/Operational
+  - Microsoft-Windows-SMBServer/Security
+
+  # AppLocker / Whitelisting
+  - Microsoft-Windows-AppLocker/MSI and Script
+  - Microsoft-Windows-AppLocker/EXE and DLL
+  - Microsoft-Windows-AppLocker/Packaged app-Deployment
+  - Microsoft-Windows-AppLocker/Packaged app-Execution
+
+  # DNS / DHCP (DC ise)
+  - Microsoft-Windows-DNS-Server/Operational
+  - Microsoft-Windows-DHCP-Server/Operational
+
+  # Group Policy
+  - Microsoft-Windows-GroupPolicy/Operational
+
+  # BitLocker
+  - Microsoft-Windows-BitLocker/BitLocker Management
+
+  # Kerberos / Auth (çoğu Security altında ama bazıları ayrı kanal)
+  - Microsoft-Windows-Kerberos-Key-Distribution-Center/Operational
