@@ -49,4 +49,8 @@ Thumbs.db
 data/fernet.key
 data/
 
+# Internal planning — kept local, not part of the public Community repo
+docs/TODO.md
+docs/zer0vuln_marketing_strategy.md
+
 # Zer0Vuln Specific
