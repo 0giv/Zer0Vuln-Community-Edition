@@ -160,10 +160,19 @@ class LicenseError(Exception):
     pass
 
 
-class LicenseClient:
-    def __init__(self, base_url: str, license_key: str, timeout: int = 6):
-        self.base_url = base_url.rstrip("/")
-        self.license_key = license_key
+class ServerBootstrapClient:
+    """Pulls the shared Fernet key from the main server's /api/agents/bootstrap
+    endpoint, authenticated by the per-agent key issued at enrolment.
+
+    Community Edition: this is the ONLY supported way for the agent to get its
+    encryption key. The old enterprise LicenseClient (which talked to a
+    separate license_api_server) was removed — agents now run with a single,
+    self-contained enrolment flow.
+    """
+
+    def __init__(self, server_url: str, agent_key: str, timeout: int = 6):
+        self.base_url = server_url.rstrip("/")
+        self.agent_key = agent_key
         self.timeout = timeout
         self.cache = {
             "active": False,
@@ -173,24 +182,29 @@ class LicenseClient:
         }
 
     def status(self, reveal_key: bool = False) -> dict:
-        url = f"{self.base_url}/license_status"
-        params = {"license_key": self.license_key}
-        if reveal_key:
-            params["reveal_key"] = "true"
-        r = requests.get(url, params=params, timeout=self.timeout)
-        if r.status_code == 404:
-            raise LicenseError("License not found on license server (404).")
+        # `reveal_key` is accepted for legacy callers but the bootstrap endpoint
+        # always returns the key when the agent_key is authentic.
+        del reveal_key
+        url = f"{self.base_url}/api/agents/bootstrap"
+        r = requests.get(url, headers={"X-Agent-Key": self.agent_key}, timeout=self.timeout)
+        if r.status_code in (401, 403):
+            raise LicenseError(f"Agent key rejected by server ({r.status_code}).")
         r.raise_for_status()
         data = r.json() or {}
-        if "is_active" not in data:
-            raise LicenseError("License server response missing 'is_active'.")
-        return data
+        if not data.get("ok"):
+            raise LicenseError(f"Server bootstrap failed: {data.get('error')}")
+        return {
+            "is_active": data.get("is_active", True),
+            "license_type": data.get("license_type", "Community"),
+            "expires_at": data.get("expires_at"),
+            "fernet_key": data.get("fernet_key"),
+        }
 
     def get_fernet_key(self) -> str:
         data = self.status(reveal_key=True)
         fk = data.get("fernet_key")
         if not fk:
-            raise LicenseError("License server did not return 'fernet_key' (use reveal_key=true).")
+            raise LicenseError("Server bootstrap returned no fernet_key.")
         self.cache.update({
             "active": bool(data.get("is_active")),
             "license_type": data.get("license_type"),
@@ -203,53 +217,22 @@ class LicenseClient:
         try:
             data = self.status(reveal_key=True)
             if not data.get("is_active"):
-                raise LicenseError(f"Inactive or expired license. Expires at: {data.get('expires_at')}")
-
-            # Fix: Handle both 'license_type' and 'license_types'
-            ltype = data.get("license_type")
-            if not ltype and data.get("license_types") and isinstance(data.get("license_types"), list):
-                ltype = data.get("license_types")[0]
-
+                raise LicenseError("Server reported inactive bootstrap.")
             self.cache.update({
                 "active": True,
-                "license_type": ltype or "Standard",
+                "license_type": data.get("license_type") or "Community",
                 "expires_at": data.get("expires_at"),
                 "fernet_key": data.get("fernet_key"),
             })
-            print(f"[+] License OK ({self.cache['license_type']}) expires {self.cache['expires_at']}")
+            print(f"[+] Agent bootstrap OK ({self.cache['license_type']})")
         except Exception as e:
-            print(f"[!] License validation failed at startup: {e}")
+            print(f"[!] Agent bootstrap failed: {e}")
             sys.exit(1)
 
 
-class ServerBootstrapClient(LicenseClient):
-    """Drop-in replacement for LicenseClient used by token-enrolled agents.
-
-    Instead of contacting license_api_server directly (which does not know the
-    agent's agent_key), it hits the main server's /api/agents/bootstrap with
-    an X-Agent-Key header. The server validates the agent_key against
-    agent_identities and proxies the master-license fernet_key back. This
-    removes the need to provision a per-agent license.
-    """
-
-    def __init__(self, server_url: str, agent_key: str, timeout: int = 6):
-        super().__init__(server_url, agent_key, timeout=timeout)
-
-    def status(self, reveal_key: bool = False) -> dict:
-        url = f"{self.base_url}/api/agents/bootstrap"
-        r = requests.get(url, headers={"X-Agent-Key": self.license_key}, timeout=self.timeout)
-        if r.status_code in (401, 403):
-            raise LicenseError(f"Agent key rejected by server ({r.status_code}).")
-        r.raise_for_status()
-        data = r.json() or {}
-        if not data.get("ok"):
-            raise LicenseError(f"Server bootstrap failed: {data.get('error')}")
-        return {
-            "is_active": data.get("is_active", True),
-            "license_type": data.get("license_type", "Standard"),
-            "expires_at": data.get("expires_at"),
-            "fernet_key": data.get("fernet_key"),
-        }
+# Legacy alias — old call sites in this file referenced LicenseClient as a
+# type. Keep it pointed at the bootstrap client so type hints don't 500.
+LicenseClient = ServerBootstrapClient
 
 
 def _apply_fernet_key_to_enc_db(key: str) -> None:
@@ -332,7 +315,6 @@ SERVER_IP = None
 SERVER_PORT = 5001  # TCP Ingest
 AUTOMATIONS_API_URL = None
 AUTOMATIONS_MODE = "auto"   # auto|server|db
-LICENSE_API_URL = None
 LICENSE_KEY = None
 OS_INFO = platform.platform() # Better than platform.system() + platform.release()
 
@@ -842,34 +824,6 @@ def perform_destruction():
 # Bootstrap / Main
 # ────────────────────────────────────────────────────────────────────────────────
 
-def _init_license(license_api_url: str, license_key: str):
-    """Community edition: there is no proprietary license_api server. Legacy
-    callers (started with `--license <KEY>` and no enrolment config) end up
-    here. We can't fetch a key from a server that isn't there, so we degrade
-    gracefully: ask enc_db for whichever key it can produce locally (it
-    auto-generates one on first call) and skip the refresh thread. Operators
-    who want centralised key management should run the enrolment flow and
-    let `_init_license_via_server` take over.
-
-    `license_api_url` is kept on the signature for back-compat but unused.
-    """
-    global _license_client, _key_refresher
-    _license_client = LicenseClient("", license_key)
-    _license_client.cache.update({
-        "active": True,
-        "license_type": "Community",
-        "expires_at": None,
-        "fernet_key": None,
-    })
-    # enc_db ships with a local-key fallback; trigger it without a remote round-trip.
-    if hasattr(enc_db, "ensure_fernet_key") and callable(enc_db.ensure_fernet_key):
-        try:
-            enc_db.ensure_fernet_key()
-        except Exception as e:
-            print(f"[!] enc_db.ensure_fernet_key failed: {e}", flush=True)
-    print("[+] Zer0Vuln Community Edition — running without a license server.")
-
-
 def _init_license_via_server(server_url: str, agent_key: str):
     global _license_client, _key_refresher
     _license_client = ServerBootstrapClient(server_url, agent_key)
@@ -1077,19 +1031,16 @@ def _parse_args():
                         choices=['auto', 'server', 'db'],
                         help='Automations backend: server (API), db (local table), or auto (default).')
     parser.add_argument('--server', '-s', type=str, default=None,
-                        help='Server IP or FQDN')
+                        help='Server IP or FQDN (override config.server_url)')
     parser.add_argument('--agent', '-a', type=str, default=None,
-                        help='Agent name')
-    parser.add_argument('--license', '-l', type=str, default=None,
-                        help='License key (fallback if --config not used)')
+                        help='Agent name (override config.agent_name)')
     parser.add_argument('--config', '-c', type=str, default=None,
-                        help='Path to JSON identity config (agent_name, agent_key, server_url)')
+                        help='Path to enrolment JSON config (agent_name, agent_key, server_url). '
+                             'Generated by the server installer; required for the agent to run.')
     parser.add_argument('--api', '-p', type=str, default=None,
                         help='Automations API base (Default: http://<server>:8000)')
     parser.add_argument('--ingest-port', type=int, default=5001,
                         help='Ingest TCP port (Default: 5001)')
-    parser.add_argument('--license-api', type=str, default=None,
-                        help='License API base (Default: env LICENSE_API_URL or http://127.0.0.1:5099)')
     return parser.parse_args()
 
 
@@ -1484,7 +1435,7 @@ async def screen_stream(request, ws):
 
 
 def main():
-    global AGENT_NAME, SERVER_IP, SERVER_PORT, LICENSE_KEY, LICENSE_API_URL, AUTOMATIONS_API_URL, AUTOMATIONS_MODE
+    global AGENT_NAME, SERVER_IP, SERVER_PORT, LICENSE_KEY, AUTOMATIONS_API_URL, AUTOMATIONS_MODE
 
     # Sinyal
     if hasattr(signal, 'SIGTERM'):
@@ -1516,39 +1467,28 @@ def main():
     AGENT_NAME = args.agent or cfg.get("agent_name")
     SERVER_IP = args.server or cfg.get("server_ip") or (cfg.get("server_url", "").replace("http://", "").replace("https://", "").split(":")[0] or "127.0.0.1")
     SERVER_PORT = int(args.ingest_port)
-    # Prefer per-agent key (agent_key) from config; fall back to legacy --license
-    LICENSE_KEY = cfg.get("agent_key") or args.license
+    # Community Edition: the only supported identity is the per-agent
+    # enrolment key issued by /api/agents/register and stored in config.json.
+    # Legacy `--license <KEY>` shared-secret mode was removed in v1.0.
+    LICENSE_KEY = cfg.get("agent_key")
 
     if not AGENT_NAME:
         AGENT_NAME = "agent"
-    if not LICENSE_KEY:
-        print("[!] Error: No identity found. Provide --config <path> or --license <KEY>.")
+    if not LICENSE_KEY or not cfg.get("server_url"):
+        print(
+            "[!] Missing enrolment config. Run the server installer (deploy.sh / deploy.ps1)\n"
+            "    to register this host and produce config.json, then start the agent with\n"
+            "        ./main --config <path/to/config.json>"
+        )
         sys.exit(1)
 
-    # License API: CLI > config.license_api_url > env > same-host fallback.
-    # The old hardcoded LAN default (192.168.1.51:5099) broke any deploy
-    # outside that specific subnet. docker-compose now exposes license_api_server
-    # on host port 5099, so $SERVER_IP:5099 is the right fallback.
-    LICENSE_API_URL = (
-        args.license_api
-        or cfg.get("license_api_url")
-        or os.getenv("LICENSE_API_URL")
-        or f"http://{SERVER_IP}:5099"
-    )
     AUTOMATIONS_API_URL = args.api or cfg.get("server_url") or os.getenv("AUTOMATIONS_API_URL", f"http://{SERVER_IP}:8000")
     AUTOMATIONS_MODE = (args.automations_mode or "auto").lower()
 
-    # Lisans & Fernet
-    # Token-enrolled agents (new deploy flow) carry agent_key + server_url in config.
-    # Their agent_key is NOT a license — the license_api would 404 it. Instead, we
-    # bootstrap the fernet key through the server's /api/agents/bootstrap endpoint,
-    # which authenticates the agent_key against agent_identities and proxies the
-    # server's master LICENSE_KEY to license_api on our behalf.
-    # Legacy agents (raw --license on CLI) still hit license_api directly.
-    if cfg.get("agent_key") and cfg.get("server_url"):
-        _init_license_via_server(cfg["server_url"], cfg["agent_key"])
-    else:
-        _init_license(LICENSE_API_URL, LICENSE_KEY)
+    # Bootstrap the Fernet key through the server's /api/agents/bootstrap
+    # endpoint — authenticated by the per-agent key from config.json. No
+    # external license server involved.
+    _init_license_via_server(cfg["server_url"], cfg["agent_key"])
 
     # Başlık
     print(f"[*] Agent Name: {AGENT_NAME}")
