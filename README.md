@@ -118,15 +118,67 @@ anything beyond `localhost`:
   first boot if unset; export your own value to keep it stable across
   restarts.
 
-### Local Fernet key
+### Local Fernet keys
 
-Agent telemetry is encrypted with a Fernet key auto-generated on first
-server boot at `data/fernet.key`. Treat that file like a private key:
+The server uses two separate Fernet keys, both auto-generated on first
+boot. You do not need to create them manually for a normal install.
+
+| Key | Where it lives | What it protects |
+| :--- | :--- | :--- |
+| `data/fernet.key` | `data/fernet.key` (or `FERNET_KEY_PATH` env) | Agent telemetry. Handed to each enrolled agent via `/api/agents/bootstrap`. |
+| `.env` `FERNET_KEY` | `.env` (written via `set_key`) | Server-internal at-rest encryption (e.g. user-password column). |
+
+Treat both files like private keys:
 
 - `chmod 600 data/fernet.key` (already set)
-- Back it up. Losing it makes existing encrypted-at-rest data unreadable.
-- Override path with the `FERNET_KEY_PATH` env if you store secrets
-  centrally.
+- `.env` should be `chmod 600` and is git-ignored by default.
+- Back them up. Losing `data/fernet.key` makes existing encrypted-at-rest
+  telemetry unreadable; losing `.env` `FERNET_KEY` does the same for
+  internal server data.
+
+#### Generating a key manually
+
+You only need this if you want to pre-seed the key (for example to ship
+the same key to an air-gap host, or to rotate after a leak). Both files
+accept the standard `Fernet.generate_key()` output (44-char URL-safe
+base64).
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+To pre-write the agent-shared key to disk:
+
+```bash
+mkdir -p data
+python -c "from cryptography.fernet import Fernet; open('data/fernet.key','wb').write(Fernet.generate_key())"
+chmod 600 data/fernet.key
+```
+
+To set the server-internal key via `.env`:
+
+```bash
+echo "FERNET_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> .env
+chmod 600 .env
+```
+
+To store the agent-shared key somewhere other than `data/fernet.key`,
+set `FERNET_KEY_PATH` in `.env` (or your process env) before the first
+server boot:
+
+```bash
+FERNET_KEY_PATH=/run/secrets/zer0vuln.fernet
+```
+
+#### Rotating a key
+
+There is no in-place rotation yet. To rotate:
+
+1. Stop the server.
+2. Replace `data/fernet.key` (or `.env` `FERNET_KEY`) with a fresh key.
+3. Start the server. Existing rows encrypted with the old key will not
+   decrypt anymore. Plan for downtime and either re-enrol agents or
+   accept the loss of historical encrypted telemetry.
 
 ### Threat intel API keys
 
