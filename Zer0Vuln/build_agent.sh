@@ -49,12 +49,38 @@ python3 -m PyInstaller \
     --collect-all sanic_routing \
     --collect-all tracerite \
     --collect-all html5tagger \
+    --collect-all PIL \
+    --collect-all mss \
     --hidden-import cryptography \
     --hidden-import requests \
     --hidden-import psutil \
     --hidden-import watchdog \
     --hidden-import docker \
     --hidden-import yaml \
+    --hidden-import psycopg2 \
+    --hidden-import pandas \
+    --hidden-import mss \
+    --hidden-import mss.linux \
+    --hidden-import PIL \
+    --hidden-import PIL.Image \
+    --hidden-import PIL.JpegImagePlugin \
+    --hidden-import modules.find_vulns.info_collector \
+    --hidden-import modules.find_vulns.find_vuln \
+    --hidden-import modules.alert.alert \
+    --hidden-import modules.portscanner.portscanner \
+    --hidden-import modules.edr_enforcer \
+    --hidden-import modules.docker_monitor.docker_monitor \
+    --hidden-import modules.fim \
+    --hidden-import modules.inventory \
+    --hidden-import modules.lateral_movement \
+    --hidden-import modules.log_extractor.log_extractor \
+    --hidden-import modules.check_permissions.check_permissions \
+    --hidden-import modules.resource_checker.resource_checker \
+    --hidden-import modules.resource_checker.disks \
+    --hidden-import modules.soar.soar \
+    --hidden-import modules.soar.vnc_manager \
+    --hidden-import modules.enc_db \
+    --hidden-import modules.db \
     "$SCRIPT_DIR/main.py"
 
 if [ -f "main" ]; then

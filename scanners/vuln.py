@@ -64,8 +64,10 @@ def _probe(base: str) -> bool:
         return False
     try:
         r = requests.post(f"{base}/v1/query", json={}, timeout=PROBE_TIMEOUT)
-        # Reachable if we got ANY HTTP response, including 4xx.
-        return r.status_code < 500 or r.status_code >= 600 is False
+        # Reachable if we got ANY HTTP response — even a 4xx validation error
+        # proves the host is up. Only 5xx-and-above indicates the upstream
+        # itself is dead and we should fall back to the mirror.
+        return r.status_code < 500
     except requests.RequestException:
         return False
 

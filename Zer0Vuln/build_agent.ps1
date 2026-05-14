@@ -48,27 +48,60 @@ $addData = @(
     "${modulesPath};modules"
 )
 $hiddenImports = @(
+    # third-party
     "cryptography",
     "requests",
     "psutil",
     "watchdog",
     "docker",
     "yaml",
+    "psycopg2",
+    "pandas",
+    # screen-streaming stack
+    "mss",
+    "mss.windows",
+    "PIL",
+    "PIL.Image",
+    "PIL.JpegImagePlugin",
+    # win32 service helpers
     "win32serviceutil",
     "win32service",
     "win32event",
-    "servicemanager"
+    "servicemanager",
+    # in-tree agent modules — PyInstaller's static analyser usually catches
+    # these from top-level imports in main.py, but listing them explicitly
+    # makes the bundle robust against late/conditional imports.
+    "modules.find_vulns.info_collector",
+    "modules.find_vulns.find_vuln",
+    "modules.alert.alert",
+    "modules.portscanner.portscanner",
+    "modules.edr_enforcer",
+    "modules.docker_monitor.docker_monitor",
+    "modules.fim",
+    "modules.inventory",
+    "modules.lateral_movement",
+    "modules.log_extractor.log_extractor",
+    "modules.check_permissions.check_permissions",
+    "modules.resource_checker.resource_checker",
+    "modules.resource_checker.disks",
+    "modules.soar.soar",
+    "modules.soar.vnc_manager",
+    "modules.enc_db",
+    "modules.db"
 )
 
 # --collect-all pulls data files + hidden submodules + binaries. Required for
 # sanic because tracerite ships style.css as package data that PyInstaller's
-# default module scan skips (results in FileNotFoundError on startup).
+# default module scan skips (results in FileNotFoundError on startup). Pillow
+# and mss bundle native libs the static scanner doesn't reach.
 $collectAll = @(
     "sanic",
     "sanic_cors",
     "sanic_routing",
     "tracerite",
-    "html5tagger"
+    "html5tagger",
+    "PIL",
+    "mss"
 )
 
 $piArgs = @(

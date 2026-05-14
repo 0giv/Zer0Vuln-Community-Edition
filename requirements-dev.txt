@@ -1,0 +1,6 @@
+# Test + lint stack. Pinned to the latest available at the time of the
+# initial Community release; bump in a dedicated PR.
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-cov>=5.0
+pytest-mock>=3.12
