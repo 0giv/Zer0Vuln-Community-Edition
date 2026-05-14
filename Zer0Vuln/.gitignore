@@ -20,6 +20,9 @@ main.exe
 *.db
 *.sqlite
 
+# Agent runtime config (contains secrets)
+config.json
+
 # Logs & Temp
 *.log
 deneme/
