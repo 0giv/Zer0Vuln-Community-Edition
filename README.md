@@ -350,16 +350,30 @@ if you redistribute as your own product.
 
 ## What's NOT in Community Edition
 
-These features live in the paid Pro / Enterprise distribution:
+Community Edition ships the full core SIEM + SOAR + Local-AI capability
+under AGPL-3.0 with no artificial caps on agents, retention, log volume
+or feature usage. Run it at whatever scale your hardware allows.
 
-- Multi-tenancy / MSSP mode
-- SAML 2.0 / OIDC / SCIM 2.0
-- Compliance dashboards (PCI-DSS / ISO 27001 / HIPAA) and WORM audit
-- High-availability clustering helpers
-- Signed air-gap update bundles (OSV + threat-intel + Ollama models)
-- SOAR 4-eyes approval workflow
-- Splunk / MS Sentinel / ServiceNow / Jira integrations
-- Priority support and SLA
+The following features live in the paid Pro / Enterprise distribution:
+
+| Feature | Community | Pro | Enterprise |
+| :--- | :---: | :---: | :---: |
+| Local-AI triage (Ollama) | yes | yes | yes |
+| Core SIEM + SOAR + agent | yes | yes | yes |
+| OSV vulnerability scanning | yes | yes | yes |
+| Visual playbook engine | yes | yes | yes |
+| Local user / role management | yes | yes | yes |
+| SAML 2.0 / OIDC SSO | no | yes | yes |
+| SCIM 2.0 user provisioning | no | yes | yes |
+| Multi-tenancy / MSSP mode | no | no | yes |
+| Compliance dashboards (PCI-DSS / ISO 27001 / HIPAA) | no | no | yes |
+| WORM audit retention | no | no | yes |
+| High-availability clustering | no | read replica | full HA |
+| Signed air-gap update bundles | no | no | yes |
+| SOAR 4-eyes approval workflow | no | no | yes |
+| Splunk / MS Sentinel forwarders | no | yes | yes |
+| ServiceNow / Jira ticketing | no | no | yes |
+| Support | community | email 24 h | phone + SLA |
 
 If any of those matter for your deployment, [reach out](#) and we'll
 point you to the commercial offering.
