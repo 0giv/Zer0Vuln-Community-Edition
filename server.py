@@ -16,7 +16,6 @@ from dotenv import load_dotenv
 import pathlib
 import aio_pika
 
-# --- Load Environment Variables ---
 ENV_PATH = pathlib.Path(".env")
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH)
@@ -25,7 +24,6 @@ if ENV_PATH.exists():
 
 debug = True
 
-# ---------------- Config ----------------
 
 SERVER_IP = os.getenv('INGEST_BIND', '0.0.0.0')
 SERVER_PORT = int(os.getenv('INGEST_PORT', '5001'))
@@ -36,11 +34,9 @@ DB_USER = os.getenv('DB_USER', 'root')
 DB_PASSWORD = os.getenv('DB_PASSWORD', 'my-secret-pw')
 DB_PORT = int(os.getenv('DB_PORT', '3306'))
 
-# Lisans servisi BASE URL (env ile override edebilirsin)
 LICENSE_API_BASE_URL = os.getenv('LICENSE_API_BASE_URL', 'http://host.docker.internal:5099')
 
 
-# Mini API’ye istek atarken header zorunlu olsun mu?
 REQUIRE_LICENSE_HEADER = os.getenv("REQUIRE_LICENSE_HEADER", "true").lower() in ("1", "true", "yes")
 LICENSE_HEADER_NAME    = os.getenv("LICENSE_HEADER_NAME", "X-License-Key")
 
@@ -59,7 +55,6 @@ ALLOWED_TABLES = {
     "software_inventory", "network_inventory"
 }
 
-# --- Global lisans durumu ---
 LICENSE_STATE = {
     "license_key": None,
     "fernet_key": None,
@@ -70,12 +65,9 @@ LICENSE_STATE = {
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
 
-# AI Queue Deduplication (Temporal)
-# Key: (agent, table, fingerprint), Value: timestamp
 RECENT_AI_TASKS = {}
-AI_DEDUP_WINDOW = 30 # seconds
+AI_DEDUP_WINDOW = 30
 
-# ---------------- DB helpers ----------------
 
 def connect_db(db_name):
     return mysql.connector.connect(
@@ -86,7 +78,6 @@ def connect_db(db_name):
         database=db_name,
     )
 
-# Güvenli DB adı üret (tüm illegal karakterleri '_' yap)
 def _sanitize_db_name(agent: str) -> str:
     safe = re.sub(r'[^A-Za-z0-9_]', '_', agent or 'agent')
     safe = safe.strip('_') or 'agent'
@@ -113,7 +104,6 @@ def create_tables_if_not_exist(db_name):
     conn = connect_db(db_name)
     cursor = conn.cursor()
     try:
-        # init.sql (varsa) uygula
         try:
             with open("init.sql", "r", encoding="utf-8") as f:
                 sql = f.read()
@@ -127,7 +117,6 @@ def create_tables_if_not_exist(db_name):
         except FileNotFoundError:
             pass
 
-        # agent_info tablosu
         try:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS agent_info (
@@ -146,7 +135,6 @@ def create_tables_if_not_exist(db_name):
         except mysql.connector.Error as e:
             print(f"[!] Agent info table creation/alter error: {e}")
 
-        # dedup fingerprint
         try:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS ingest_fingerprint (
@@ -176,7 +164,6 @@ def compute_fingerprint(table: str, item: dict) -> str:
 
 def compute_ai_fingerprint(table: str, item: dict) -> str:
     """Fingerprint that ignores high-entropy fields like timestamps to group similar logs for AI."""
-    # Ignore fields that change every time but don't change the meaning (timestamp, id, etc)
     ignore = {"id", "sent", "timestamp", "@timestamp", "TimeGenerated", "time", "created_at", "PID", "ProcessID", "process_id"}
     data = {k: v for k, v in item.items() if k not in ignore}
     blob = json.dumps(data, sort_keys=True, separators=(",", ":"), default=_json_default).encode("utf-8")
@@ -188,9 +175,6 @@ def update_agent_info(agent: str, public_ip: str, os_info: str = None, hostname:
     conn = connect_db(db_name)
     cursor = conn.cursor()
     try:
-        # Idempotent migration: legacy agent_info tables predate hostname/mac.
-        # Errors swallowed because re-running ALTER on an already-migrated
-        # table raises "duplicate column", which is fine.
         for col, ddl in (
             ("hostname", "ALTER TABLE agent_info ADD COLUMN hostname VARCHAR(255) NULL"),
             ("mac_address", "ALTER TABLE agent_info ADD COLUMN mac_address VARCHAR(48) NULL"),
@@ -221,10 +205,8 @@ import core.opensearch as os_utils
 
 async def publish_to_ai_queue(agent: str, table: str, item: dict):
     """Publish a log entry to RabbitMQ for both automation and defensive (SOAR) analysis"""
-    # Always send to automation for general threat summary
     await mq_utils.publish_to_queue(mq_utils.AI_AUTOMATION, agent, table, item)
     
-    # Also send to SOAR queue if it's an alert, for defensive recommendations
     if table == "events_alert":
         await mq_utils.publish_to_queue(mq_utils.AI_SOAR, agent, table, item)
         print(f"[AI-Trigger] Published {table} task for {agent} to SOAR (Defensive) queue.")
@@ -261,7 +243,6 @@ async def insert_data(agent: str, table: str, data: list, public_ip: str = None,
             print(f"[!] Unknown table '{table}' received. Skipping.")
             return
 
-        # tekil snapshot tabloları
         if table in {"resource_usage", "disk_usage", "critical_files", "network_connections", "hardware_inventory", "docker_containers"}:
             cursor.execute(f"DELETE FROM `{table}`")
 
@@ -284,7 +265,6 @@ async def insert_data(agent: str, table: str, data: list, public_ip: str = None,
             sql = f"INSERT INTO `{table}` ({keys}) VALUES ({values})"
             cursor.execute(sql, list(item.values()))
 
-            # RabbitMQ entegrasyonu: Sadece SIEM ve Alert verilerini AI'ya gönder
             if table in {"siem_events", "events_alert"}:
                 ai_fp = compute_ai_fingerprint(table, item)
                 now = time.time()
@@ -293,16 +273,13 @@ async def insert_data(agent: str, table: str, data: list, public_ip: str = None,
                 last_time = RECENT_AI_TASKS.get(cache_key, 0)
                 if now - last_time > AI_DEDUP_WINDOW:
                     RECENT_AI_TASKS[cache_key] = now
-                    # Arka planda çalıştır ki DB işlemini bloklamasın
                     pub_task = asyncio.create_task(publish_to_ai_queue(agent, table, item))
                     print(f"[AI-Trigger] Published {table} task for {agent} to RabbitMQ.")
 
                     
-                    # Periodic cleanup (every 1000 tasks)
                     if len(RECENT_AI_TASKS) > 1000:
                         RECENT_AI_TASKS.clear() 
 
-            # OpenSearch entegrasyonu: Tüm logları OpenSearch'e gönder
             asyncio.create_task(os_utils.index_log(agent, table, item))
 
         conn.commit()
@@ -313,7 +290,6 @@ async def insert_data(agent: str, table: str, data: list, public_ip: str = None,
         cursor.close()
         conn.close()
 
-# ---------------- TCP client handler ----------------
 
 async def recv_all(reader, length):
     data = b''
@@ -364,7 +340,6 @@ async def handle_client(reader, writer):
         writer.close()
         await writer.wait_closed()
 
-# ---------------- License fetch & periodic check ----------------
 
 def _check_auth_header(request):
     if not REQUIRE_LICENSE_HEADER:
@@ -389,7 +364,6 @@ def _candidate_license_urls(base: str) -> list[tuple[str, str]]:
     for h in hosts:
         for p in paths:
             out.append((h, p))
-    # tekrarları kaldır
     seen = set()
     uniq = []
     for b, p in out:
@@ -403,7 +377,7 @@ def fetch_license_state(license_key: str, retries: int = 3, backoff_sec: float =
 
     sess = requests.Session()
     sess.headers.update({"Connection": "close", "Accept": "application/json"})
-    proxies = {"http": None, "https": None}  # env proxy kapat
+    proxies = {"http": None, "https": None}
 
     last_err = None
     cands = _candidate_license_urls(LICENSE_API_BASE_URL)
@@ -476,11 +450,9 @@ async def periodic_license_check(license_key, interval=600):
             print("[-] License invalidated. Shutting down the server.")
             os._exit(1)
 
-# ---------------- Mini Sanic HTTP API ----------------
 
 
 
-# ---------------- main ----------------
 
 async def main(license_key: str):
     if not validate_license_key(license_key):

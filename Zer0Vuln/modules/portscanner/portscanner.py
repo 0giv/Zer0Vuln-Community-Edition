@@ -6,12 +6,10 @@ from datetime import datetime
 import struct
 import asyncio
 
-# Configuration
-timeout = 3.0  # Daha uzun timeout
+timeout = 3.0
 target = "127.0.0.1"
 TABLE = 'portscan_result'
 
-# Kapsamlı port-servis mapping
 COMMON_PORTS = {
     1: 'TCPMUX', 5: 'RJE', 7: 'Echo', 9: 'Discard', 11: 'Systat', 13: 'Daytime',
     17: 'QOTD', 18: 'MSP', 19: 'CHARGEN', 20: 'FTP-DATA', 21: 'FTP', 22: 'SSH',
@@ -160,9 +158,7 @@ COMMON_PORTS = {
     61613: 'STOMP', 61616: 'ActiveMQ-OpenWire', 64738: 'Mumble'
 }
 
-# Çok kapsamlı banner pattern'leri
 BANNER_PATTERNS = [
-    # Web Servers & Proxies
     (r'(?i)nginx[/\s]*([\d.]+)', 'NGINX', 1),
     (r'(?i)apache[/\s]*([\d.]+)', 'Apache', 1),
     (r'(?i)microsoft-iis[/\s]*([\d.]+)', 'IIS', 1),
@@ -182,7 +178,6 @@ BANNER_PATTERNS = [
     (r'(?i)cherokee[/\s]*([\d.]+)', 'Cherokee', 1),
     (r'(?i)mongrel[/\s]*([\d.]+)', 'Mongrel', 1),
     
-    # Protocols
     (r'(?i)^ssh-([\d.]+)', 'SSH', 1),
     (r'(?i)openssh[_\s]*([\d.p]+)', 'OpenSSH', 1),
     (r'(?i)dropbear[_\s]*([\d.]+)', 'Dropbear-SSH', 1),
@@ -195,7 +190,6 @@ BANNER_PATTERNS = [
     (r'(?i)vsftpd.*?([\d.]+)', 'vsFTPd', 1),
     (r'(?i)filezilla.*?([\d.]+)', 'FileZilla', 1),
     
-    # Email
     (r'(?i)220.*?esmtp', 'SMTP', 0),
     (r'(?i)220.*?smtp', 'SMTP', 0),
     (r'(?i)postfix.*?([\d.]+)', 'Postfix', 1),
@@ -208,7 +202,6 @@ BANNER_PATTERNS = [
     (r'(?i)courier-imap.*?([\d.]+)', 'Courier-IMAP', 1),
     (r'(?i)cyrus.*?imap.*?([\d.]+)', 'Cyrus-IMAP', 1),
     
-    # Databases
     (r'(?i)mysql.*?([\d.]+)', 'MySQL', 1),
     (r'(?i)mariadb.*?([\d.]+)', 'MariaDB', 1),
     (r'(?i)percona.*?([\d.]+)', 'Percona', 1),
@@ -230,14 +223,12 @@ BANNER_PATTERNS = [
     (r'(?i)sybase.*?([\d.]+)', 'Sybase', 1),
     (r'(?i)db2.*?([\d.]+)', 'IBM-DB2', 1),
     
-    # Message Queues
     (r'(?i)rabbitmq.*?([\d.]+)', 'RabbitMQ', 1),
     (r'(?i)kafka.*?([\d.]+)', 'Kafka', 1),
     (r'(?i)activemq.*?([\d.]+)', 'ActiveMQ', 1),
     (r'(?i)zeromq.*?([\d.]+)', 'ZeroMQ', 1),
     (r'(?i)nats.*?([\d.]+)', 'NATS', 1),
     
-    # Monitoring & Logging
     (r'(?i)grafana.*?([\d.]+)', 'Grafana', 1),
     (r'(?i)prometheus.*?([\d.]+)', 'Prometheus', 1),
     (r'(?i)kibana.*?([\d.]+)', 'Kibana', 1),
@@ -247,7 +238,6 @@ BANNER_PATTERNS = [
     (r'(?i)zabbix.*?([\d.]+)', 'Zabbix', 1),
     (r'(?i)icinga.*?([\d.]+)', 'Icinga', 1),
     
-    # Version Control
     (r'(?i)git.*?([\d.]+)', 'Git', 1),
     (r'(?i)gitlab.*?([\d.]+)', 'GitLab', 1),
     (r'(?i)github.*?([\d.]+)', 'GitHub', 1),
@@ -255,7 +245,6 @@ BANNER_PATTERNS = [
     (r'(?i)bitbucket.*?([\d.]+)', 'Bitbucket', 1),
     (r'(?i)svn.*?([\d.]+)', 'SVN', 1),
     
-    # VNC & Remote Desktop
     (r'(?i)vnc.*?rfb\s*([\d.]+)', 'VNC', 1),
     (r'(?i)realvnc.*?([\d.]+)', 'RealVNC', 1),
     (r'(?i)tightvnc.*?([\d.]+)', 'TightVNC', 1),
@@ -264,14 +253,12 @@ BANNER_PATTERNS = [
     (r'(?i)teamviewer.*?([\d.]+)', 'TeamViewer', 1),
     (r'(?i)anydesk.*?([\d.]+)', 'AnyDesk', 1),
     
-    # Container & Orchestration
     (r'(?i)docker.*?([\d.]+)', 'Docker', 1),
     (r'(?i)kubernetes.*?([\d.]+)', 'Kubernetes', 1),
     (r'(?i)k3s.*?([\d.]+)', 'K3s', 1),
     (r'(?i)nomad.*?([\d.]+)', 'Nomad', 1),
     (r'(?i)mesos.*?([\d.]+)', 'Mesos', 1),
     
-    # CMS & Frameworks
     (r'(?i)wordpress.*?([\d.]+)', 'WordPress', 1),
     (r'(?i)drupal.*?([\d.]+)', 'Drupal', 1),
     (r'(?i)joomla.*?([\d.]+)', 'Joomla', 1),
@@ -286,13 +273,11 @@ BANNER_PATTERNS = [
     (r'(?i)ruby.*?rails.*?([\d.]+)', 'Ruby-on-Rails', 1),
     (r'(?i)asp\.net.*?([\d.]+)', 'ASP.NET', 1),
     
-    # Media & Streaming
     (r'(?i)plex.*?([\d.]+)', 'Plex', 1),
     (r'(?i)jellyfin.*?([\d.]+)', 'Jellyfin', 1),
     (r'(?i)emby.*?([\d.]+)', 'Emby', 1),
     (r'(?i)kodi.*?([\d.]+)', 'Kodi', 1),
     
-    # Other Services
     (r'(?i)consul.*?([\d.]+)', 'Consul', 1),
     (r'(?i)etcd.*?([\d.]+)', 'etcd', 1),
     (r'(?i)vault.*?([\d.]+)', 'Vault', 1),
@@ -319,7 +304,6 @@ BANNER_PATTERNS = [
     (r'(?i)nfs.*?([\d.]+)', 'NFS', 1),
 ]
 
-# Servis-spesifik çoklu probe mesajları
 SERVICE_PROBES = {
     'HTTP': [
         b'GET / HTTP/1.0\r\n\r\n',
@@ -589,8 +573,6 @@ async def scan_ports(target, timeout):
     import asyncio
     import sys
     print(f"[*] Scanning all ports (1-65535) on {target} (AsyncIO)...")
-    # Windows SelectorEventLoop caps FDs at FD_SETSIZE (512). ProactorEventLoop
-    # (default on Win since 3.8) has no such cap, but stay conservative either way.
     max_concurrent = 400 if sys.platform == 'win32' else 1500
     semaphore = asyncio.Semaphore(max_concurrent)
     result_queue = asyncio.Queue()
@@ -603,7 +585,6 @@ async def scan_ports(target, timeout):
         for t in tasks:
             if not t.done():
                 t.cancel()
-        # Drain cancellations so tasks aren't GC'd in pending state.
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
     
@@ -674,9 +655,6 @@ async def main_async():
 def main():
     import sys
     import asyncio
-    # Use the default ProactorEventLoop on Windows (no FD_SETSIZE limit).
-    # WindowsSelectorEventLoopPolicy was previously forced here, which capped
-    # concurrent sockets at 512 and caused "too many file descriptors in select()".
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:

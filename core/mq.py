@@ -5,7 +5,6 @@ from datetime import datetime
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
 
-# Queue names
 AI_AUTOMATION = "ai_automation_queue"
 AI_MANUAL     = "ai_manual_queue"
 AI_SOAR       = "ai_soar_queue"

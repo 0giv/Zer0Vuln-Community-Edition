@@ -12,7 +12,6 @@ from modules.enc_db import insert_record_enc, fetch_one_dec, update_record_enc, 
 
 IS_WINDOWS = platform.system() == "Windows"
 
-# --- FIM (File Integrity Monitoring) ---
 CRITICAL_FILES_TO_HASH = {
     "windows": [
         "C:\\Windows\\System32\\drivers\\etc\\hosts",
@@ -46,30 +45,21 @@ def check_fim():
         if not current_hash:
             continue
         
-        # Check against baseline in DB
-        # Note: dup_fp used for lookup if needed, but here we use path
-        # Encrypted lookup might be tricky if path is encrypted. 
-        # For simplicity, we'll use a plain where on path if it's not encrypted, 
-        # or we fetch all and filter in Python.
-        # Since 'path' in fim_data is encrypted, we fetch all dec.
         
-        baseline = fetch_one_dec("fim_data", where="path = %s", params=(path,)) # Simplified; assumes path indexable
+        baseline = fetch_one_dec("fim_data", where="path = %s", params=(path,))
         
         if not baseline:
-            # Baseline doesn't exist, create it
             insert_record_enc("fim_data", {
                 "path": path,
                 "hash_sha256": current_hash,
                 "status": "baseline"
             })
         elif baseline["hash_sha256"] != current_hash:
-            # Hash changed!
             insert_record_enc("fim_data", {
                 "path": path,
                 "hash_sha256": current_hash,
                 "status": "changed"
             })
-            # Also insert a SIEM event
             from modules.enc_db import insert_record_enc as siem_insert
             siem_insert("events_alert", {
                 "source": "FIM",
@@ -78,11 +68,9 @@ def check_fim():
                 "timestamp": datetime.now().isoformat()
             })
 
-# --- Network Connection Tracker ---
 def track_network():
     for conn in psutil.net_connections(kind='inet'):
         if conn.status == 'ESTABLISHED' and conn.raddr:
-            # Get process info
             try:
                 proc = psutil.Process(conn.pid)
                 name = proc.name()
@@ -99,7 +87,6 @@ def track_network():
                 "state": conn.status
             })
 
-# --- Process Anomaly & Tree ---
 SUSPICIOUS_PARENTS = {
     "excel.exe": ["powershell.exe", "cmd.exe"],
     "winword.exe": ["powershell.exe", "cmd.exe"],
@@ -125,7 +112,6 @@ def monitor_processes():
             ppid = pinfo['ppid']
             name = pinfo['name']
             
-            # Check suspicious parent
             if ppid > 0:
                 try:
                     parent = psutil.Process(ppid)
@@ -140,11 +126,10 @@ def monitor_processes():
                                 "username": pinfo['username'],
                                 "status": "suspicious_child"
                             })
-                            continue # Skip further checks if already flagged
+                            continue
                 except:
                     pass
             
-            # Check suspicious execution paths
             try:
                 exe_path = proc.exe().lower()
                 for sus_path in SUSPICIOUS_PATHS:
@@ -164,7 +149,6 @@ def monitor_processes():
         except:
             continue
 
-# --- Inventory & Hardware ---
 def get_hardware_inventory():
     if IS_WINDOWS:
         ps_cmd = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-PnpDevice -PresentOnly | Select-Object FriendlyName, InstanceId | ConvertTo-Json"
@@ -182,7 +166,6 @@ def get_hardware_inventory():
                     })
         except: pass
     else:
-        # Basic Linux Hardware
         try:
             res = subprocess.run(["lsusb"], capture_output=True, text=True, encoding='utf-8', errors='replace')
             for line in res.stdout.splitlines():
@@ -192,16 +175,13 @@ def get_hardware_inventory():
                 })
         except: pass
 
-# --- Registry Monitoring (Windows) ---
 def monitor_registry():
     if not IS_WINDOWS: return
-    # Simplified: check Run keys
     ps_cmd = "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run | ConvertTo-Json"
     try:
         res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, encoding='utf-8', errors='replace')
         if res.returncode == 0 and res.stdout:
             data = json.loads(res.stdout)
-            # Remove system properties
             for k, v in data.items():
                 if k not in ["PSPath", "PSParentPath", "PSChildName", "PSDrive", "PSProvider"]:
                     insert_record_enc("registry_logs", {

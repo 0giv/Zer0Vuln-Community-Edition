@@ -16,11 +16,8 @@ try:
 except Exception:
     yaml = None
 
-# ❗ insert için enc_db kullan
 from modules.enc_db import insert_record_enc, fetch_where_dec, set_encrypt_fields_map
 
-# Eğer başka yerlerde de db ihtiyacı olursa (ör. migration vs.), modules.db importlanabilir
-# from modules.db import fetch_where   # artık kullanmayacağız
 
 DEFAULT_TARGET_DIRS_LINUX = ['/etc', '/var/www', '/home']
 DEFAULT_TARGET_DIRS_WINDOWS = ['C:\\Users']
@@ -56,15 +53,12 @@ def is_critical(filename: str) -> bool:
 def normalize(value):
     return value.replace("'", "''") if isinstance(value, str) else value
 
-# --- NEW: deterministik fingerprint (şifrelenmez) ---
 def make_dup_fp(path: str, owner: str, grp: str, permissions: str) -> str:
     raw = f"{path}|{owner}|{grp}|{permissions}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
-# --- NEW: şifreli tabloda duplicate kontrolünü dup_fp ile yap ---
 def is_duplicate(path, owner, grp, permissions) -> bool:
     dup_fp = make_dup_fp(path, owner, grp, permissions)
-    # şifrelenmemiş alan olduğu için plain WHERE yazabiliriz
     where = "dup_fp = %s"
     rows = fetch_where_dec(TABLE, where=where, params=(dup_fp,), limit=1)
     return bool(rows)
@@ -121,7 +115,6 @@ def check_file_windows(path: str) -> Optional[dict]:
         import win32api
         import ntsecuritycon as con
         
-        # Get Owner and Group
         try:
             sd = win32security.GetFileSecurity(path, win32security.OWNER_SECURITY_INFORMATION)
             owner_sid = sd.GetSecurityDescriptorOwner()
@@ -135,7 +128,6 @@ def check_file_windows(path: str) -> Optional[dict]:
         except Exception:
             pass
 
-        # Get File Attributes (Hidden, System, ReadOnly, etc.)
         try:
             attrs = win32api.GetFileAttributes(path)
             attr_list = []
@@ -151,12 +143,10 @@ def check_file_windows(path: str) -> Optional[dict]:
             pass
             
     except ImportError:
-        # Fallback to getpass if pywin32 is not installed
         try:
             user = getpass.getuser()
         except:
             pass
-        # Basic os.stat fallback for attributes
         if os.path.isdir(path):
             win_perms = "Directory"
         elif not os.access(path, os.W_OK):
@@ -289,14 +279,12 @@ def main():
     "critical_files": ["path", "owner", "grp", "permissions", "last_opened"]
     })
 
-    # DB insert (ŞİFRELİ)
     for item in results:
         item['collected_at'] = datetime.utcnow()
 
-        # dedup fingerprint (şifrelenmeyecek alan)
         dup_fp = make_dup_fp(item['path'], item['owner'], item['grp'], item['permissions'])
 
         if not is_duplicate(item['path'], item['owner'], item['grp'], item['permissions']):
             payload = dict(item)
-            payload['dup_fp'] = dup_fp  # ❗ plaintext, index’li alan
-            insert_record_enc(TABLE, payload)  # ❗ şifreli insert
+            payload['dup_fp'] = dup_fp
+            insert_record_enc(TABLE, payload)

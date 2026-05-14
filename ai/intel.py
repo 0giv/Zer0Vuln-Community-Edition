@@ -54,12 +54,9 @@ def check_hash_vt(file_hash):
 def extract_indicators(text):
     """Extract IPs and common hashes from log text using basic regex"""
     import re
-    # Simple IPv4 regex
     ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', text)
-    # Simple SHA256/MD5 regex
     hashes = re.findall(r'\b[a-fA-F0-0]{32,64}\b', text)
     
-    # Filter out local/internal IPs if needed
     clean_ips = [ip for ip in set(ips) if not ip.startswith(("127.", "192.168.", "10.", "172.16."))]
     
     return list(clean_ips), list(set(hashes))

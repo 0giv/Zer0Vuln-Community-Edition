@@ -24,13 +24,9 @@ def send_local_alert(severity, message, metadata=None):
 
 def get_and_save_disk_info():
     try:
-        # Get existing disks from DB to compare
         try:
             existing_rows = fetch_where("disk_usage")
         except Exception as e:
-            # Almost always means the local disk_usage table hasn't been
-            # created yet (db/init.sql hasn't run on this host). Treat as
-            # no existing rows so the first scan can populate.
             print(f"[DiskMonitor] fetch_where('disk_usage') failed: {e}", flush=True)
             existing_rows = []
         existing_devices = {r['device'] for r in existing_rows}
@@ -56,7 +52,6 @@ def get_and_save_disk_info():
                     'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
 
-                # Check if it's a NEW disk
                 if device not in existing_devices and existing_devices:
                     send_local_alert(
                         "CRITICAL",
@@ -64,9 +59,6 @@ def get_and_save_disk_info():
                         {"device": device, "mountpoint": mountpoint, "total_gb": data['total_gb']}
                     )
 
-                # Upsert: prefer UPDATE on a matching device, otherwise INSERT.
-                # If UPDATE fails (e.g. the row vanished mid-scan), fall back
-                # to INSERT so the disk still gets recorded for this cycle.
                 match = [r for r in existing_rows if r['device'] == device]
                 try:
                     if match:
@@ -93,11 +85,8 @@ def get_and_save_disk_info():
         if ok or skipped:
             print(f"[DiskMonitor] cycle: persisted={ok} skipped={skipped} partitions={len(partitions)}", flush=True)
 
-        # Remove disks that are no longer present (optional, but good for cleanup)
         for old_device in existing_devices:
             if old_device not in current_devices:
-                # Disk disconnected
-                # Optional: Alert of disconnection
                 pass
 
     except Exception as e:

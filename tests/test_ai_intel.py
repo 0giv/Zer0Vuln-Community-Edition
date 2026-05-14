@@ -16,12 +16,10 @@ def test_extract_indicators_pulls_public_ips_only():
         "another hop via 10.0.0.4 / 172.16.0.1 / 127.0.0.1 / 203.0.113.42"
     )
     ips, hashes = intel.extract_indicators(text)
-    # Private + loopback IPs filtered out.
     assert "192.168.1.5" not in ips
     assert "10.0.0.4" not in ips
     assert "172.16.0.1" not in ips
     assert "127.0.0.1" not in ips
-    # Public IPs kept.
     assert set(ips) == {"8.8.8.8", "203.0.113.42"}
     assert hashes == []
 

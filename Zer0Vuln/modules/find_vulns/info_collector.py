@@ -4,7 +4,6 @@ import sys
 import os
 import hashlib
 
-# ŞİFRELİ DB KATMANI
 import modules.enc_db as enc_db
 
 enc_db.add_encrypted_fields("packages", ["package", "version"])
@@ -54,7 +53,7 @@ def list_linux_packages(pm):
     elif pm == 'rpm':
         cmd = ['rpm', '-qa', '--queryformat', '%{NAME},%{VERSION}-%{RELEASE}\n']
     elif pm == 'pacman':
-        cmd = ['pacman', '-Q']  # "package version" formatında döner
+        cmd = ['pacman', '-Q']
     else:
         raise RuntimeError('Unknown Linux package manager')
 
@@ -64,13 +63,11 @@ def list_linux_packages(pm):
         sys.exit(1)
 
     if pm == 'pacman':
-        # pacman çıktısı: "pkgname version"
         return [line.split(' ', 1) for line in result.stdout.splitlines() if line.strip()]
     else:
         return [line.split(',', 1) for line in result.stdout.splitlines() if line.strip()]
 
 def list_windows_packages():
-    # wmic is slow and deprecated. Using PowerShell to query Registry is 10x faster.
     ps_script = (
         "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | "
         "Select-Object DisplayName, DisplayVersion | ConvertTo-Json"
@@ -82,7 +79,7 @@ def list_windows_packages():
         if result.returncode == 0 and result.stdout and result.stdout.strip():
             import json
             raw_data = json.loads(result.stdout)
-            if isinstance(raw_data, dict): # Single item
+            if isinstance(raw_data, dict):
                 raw_data = [raw_data]
             
             packages = []
@@ -95,7 +92,6 @@ def list_windows_packages():
     except Exception as e:
         print(f"PowerShell package fetch failed: {e}. Falling back to basic check.")
 
-    # Fallback to basic wmic if PowerShell fails
     cmd = ['wmic', 'product', 'get', 'name,version']
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
 ...
@@ -105,7 +101,6 @@ def make_dup_fp(package: str, version: str) -> str:
 
 def save_packages(packages):
     delete_all_enc(TABLE)
-    # Deduplicate packages to prevent unique constraint errors
     seen = set()
     unique_packages = []
     for p, v in packages:
@@ -118,7 +113,7 @@ def save_packages(packages):
         payload = {
             'package': package,
             'version': version,
-            'dup_fp': make_dup_fp(package, version),  # plaintext index alanı
+            'dup_fp': make_dup_fp(package, version),
         }
         insert_record_enc(TABLE, payload)
 

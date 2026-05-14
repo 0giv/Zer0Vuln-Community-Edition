@@ -1,4 +1,3 @@
-# modules/enc_db.py
 from __future__ import annotations
 
 import os
@@ -9,25 +8,16 @@ import requests
 from typing import Dict, Any, List, Optional, Union
 from cryptography.fernet import Fernet, InvalidToken
 
-# Orijinal db fonksiyonları
 import modules.db as _db
 
-# =========================
-# Konfig / Varsayılanlar
-# =========================
-# Not: Bu modül artık lisans anahtarını dokümana uygun endpoint'ten çeker:
-#   GET /license_status?license_key=...&reveal_key=true
-# Header kullanmıyoruz. İstersen LICENSE_API_URL ve LICENSE_KEY'i env ile geçebilirsin.
 
 LICENSE_API_URL: str = os.getenv("LICENSE_API_URL", "http://127.0.0.1:5000")
-LICENSE_KEY: Optional[str] = os.getenv("LICENSE_KEY")  # env üzerinden de gelebilir
+LICENSE_KEY: Optional[str] = os.getenv("LICENSE_KEY")
 FERNET_REFRESH_SEC: int = int(os.getenv("FERNET_REFRESH_SEC", "600"))
 
-# Eski parametreler (artık kullanılmıyor ama backward-compat için tutuyoruz)
-LICENSE_HEADER_NAME: str = "X-License-Key"            # kullanılmıyor
-FERNET_ENDPOINT_PATH: str = "/license/fernet"         # kullanılmıyor
+LICENSE_HEADER_NAME: str = "X-License-Key"
+FERNET_ENDPOINT_PATH: str = "/license/fernet"
 
-# Şifrelenecek alan haritası (tablo -> alan listesi)
 ENCRYPT_FIELDS_MAP: Dict[str, List[str]] = {
     "fim_data": ["path", "hash_sha256"],
     "registry_logs": ["hive", "key_path", "value_name", "value_data"],
@@ -37,23 +27,19 @@ ENCRYPT_FIELDS_MAP: Dict[str, List[str]] = {
     "security_audit": ["finding", "details"]
 }
 
-# ---- Dahili durum / kilit ----
 _LOCK = threading.RLock()
 __FERNET_OBJ: Optional[Fernet] = None
 __FERNET_TS: float = 0.0
-__FERNET_KEY_STR: Optional[str] = None  # debug/diagnostic amaçlı
+__FERNET_KEY_STR: Optional[str] = None
 
 ENC_PREFIX = "enc::"
 
 
-# =========================
-# Public API: Config
-# =========================
 def set_license_config(
     license_key: Optional[str] = None,
     api_url: Optional[str] = None,
-    header_name: Optional[str] = None,          # BACK-COMP: yok sayılacak
-    fernet_endpoint_path: Optional[str] = None, # BACK-COMP: yok sayılacak
+    header_name: Optional[str] = None,
+    fernet_endpoint_path: Optional[str] = None,
     refresh_sec: Optional[int] = None,
 ) -> None:
     """
@@ -67,7 +53,6 @@ def set_license_config(
         LICENSE_API_URL = api_url
     if refresh_sec is not None:
         FERNET_REFRESH_SEC = max(60, int(refresh_sec))
-    # header_name ve fernet_endpoint_path kasıtlı olarak kullanılmıyor
 
 
 def set_encrypt_fields_map(mapping: Dict[str, List[str]], *, merge: bool = False) -> None:
@@ -90,9 +75,6 @@ def add_encrypted_fields(table: str, fields: List[str]) -> None:
     set_encrypt_fields_map({table: fields}, merge=True)
 
 
-# =========================
-# Public API: Fernet anahtar yönetimi
-# =========================
 def set_fernet_key(key: Union[str, bytes]) -> None:
     """
     Dışarıdan Fernet anahtarını enjekte etmek için.
@@ -123,9 +105,6 @@ def has_key() -> bool:
         return __FERNET_OBJ is not None
 
 
-# =========================
-# Dahili: Anahtar fetch & cache
-# =========================
 class ConfigError(RuntimeError):
     pass
 
@@ -176,11 +155,9 @@ def _get_fernet() -> Fernet:
 
     now = time.time()
     with _LOCK:
-        # Geçerli ve tazeyse kullan
         if __FERNET_OBJ is not None and (now - __FERNET_TS) <= FERNET_REFRESH_SEC:
             return __FERNET_OBJ
 
-    # Buraya geldiyse ya hiç yok ya da süresi doldu — fetch et
     key_b64 = _fetch_fernet_key_v2()
     cipher = Fernet(key_b64.encode("utf-8") if isinstance(key_b64, str) else key_b64)
 
@@ -191,9 +168,6 @@ def _get_fernet() -> Fernet:
         return __FERNET_OBJ
 
 
-# =========================
-# Dahili: Encrypt/Decrypt yardımcıları
-# =========================
 def _should_encrypt(table: str, field: str) -> bool:
     fields = ENCRYPT_FIELDS_MAP.get(table) or []
     return field in fields
@@ -275,9 +249,6 @@ def _decrypt_rows(table: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return [_decrypt_row(table, r) for r in rows]
 
 
-# =========================
-# Şifreli DB Wrapper Fonksiyonları
-# =========================
 def insert_record_enc(table: str, data: dict):
     """insert_record'in şifreli versiyonu."""
     enc = _encrypt_row(table, data)

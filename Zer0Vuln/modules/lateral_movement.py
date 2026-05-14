@@ -13,7 +13,7 @@ class LateralMovementDetector:
     - Remote process execution (simulated).
     """
     def __init__(self):
-        self.suspicious_ports = [3389, 22, 5900, 445, 139] # RDP, SSH, VNC, SMB
+        self.suspicious_ports = [3389, 22, 5900, 445, 139]
         
     def check_network_connections(self):
         findings = []
@@ -39,10 +39,9 @@ class LateralMovementDetector:
 
     def check_suspicious_processes(self):
         findings = []
-        # Windows & Linux suspicious process names
         suspicious_names = [
-            "psexec.exe", "wsmprovhost.exe", "winrs.exe", # Windows
-            "nmap", "masscan", "socat", "nc", "ncat", "netcat", # Linux/Cross-platform
+            "psexec.exe", "wsmprovhost.exe", "winrs.exe",
+            "nmap", "masscan", "socat", "nc", "ncat", "netcat",
             "rdesktop", "mimikatz", "chisel"
         ]
         try:
@@ -66,7 +65,6 @@ class LateralMovementDetector:
         findings = []
         system = platform.system().lower()
         if system == "windows":
-            # Check Event ID 4625 (Failed Logon)
             try:
                 cmd = ["wevtutil", "qe", "Security", "/q:*[System[(EventID=4625)]]", "/c:5", "/rd:true", "/f:text"]
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding='utf-8', errors='replace')
@@ -80,7 +78,6 @@ class LateralMovementDetector:
             except Exception as e:
                 pass
         elif system == "linux":
-            # Check journalctl for SSH brute force
             try:
                 cmd = ["journalctl", "-u", "sshd", "-n", "100", "--no-pager"]
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, encoding='utf-8', errors='replace')

@@ -1,6 +1,5 @@
 import sys
 import os
-# Add Zer0Vuln to path so internal imports like 'modules.soar' work for the worker
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Zer0Vuln"))
 
 import asyncio
@@ -14,25 +13,17 @@ from ai.utils import load_ai_config, analyze_with_ai, save_ai_results, queue_soa
 from ai.intel import get_threat_intel_summary
 from core import mq as mq_utils
 
-# Workers can also trigger SOAR actions
 from modules.soar.soar import SOARAutomation, SOARConfig
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("AI-Worker")
 
 WORKER_TYPE = os.getenv("WORKER_TYPE", "automation").lower()
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
 
-# Confidence floor for keeping a finding as a CRITICAL "insight".
-# Small local LLMs (e.g. llama3.2:3b) over-flag, so we drop low-confidence noise.
 CRITICAL_CONFIDENCE_THRESHOLD = float(os.getenv("AI_CRIT_CONF", "0.6"))
 SUSPICIOUS_CONFIDENCE_THRESHOLD = float(os.getenv("AI_SUS_CONF", "0.75"))
 
-# Prompts Mapping
-# IMPORTANT: Force a strict JSON verdict so we can drop low-confidence /
-# benign findings before saving them as "AI Insights". The model otherwise
-# floods the UI with false-positive criticals.
 PROMPTS = {
     "automation": """You are a senior SOC analyst triaging telemetry. Be strict. Most logs are benign noise (routine logons, service checks, dev activity). Only escalate when a SPECIFIC, CONCRETE indicator of attack is present in the log.
 
@@ -76,9 +67,7 @@ def _extract_json(text: str):
     Handles models that wrap JSON in prose or markdown fences."""
     if not text:
         return None
-    # Strip code fences
     cleaned = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
-    # Find first { ... matching } via brace counting
     start = cleaned.find('{')
     if start == -1:
         return None
@@ -115,14 +104,12 @@ def _format_insight(verdict: dict, prefix: str) -> str:
         parts.append(f"-> {action}")
     return ' '.join(p for p in parts if p)
 
-# Queue Mapping
 QUEUES = {
     "automation": mq_utils.AI_AUTOMATION,
     "manual": mq_utils.AI_MANUAL,
     "defensive": mq_utils.AI_SOAR
 }
 
-# SOAR Automation Instance (for Defensive Worker)
 soar = SOARAutomation(SOARConfig())
 
 async def handle_automation(agent, table, data, api_key, endpoint):
@@ -139,8 +126,6 @@ async def handle_automation(agent, table, data, api_key, endpoint):
 
     intel_match = await asyncio.to_thread(get_threat_intel_summary, log_text)
 
-    # Gate: keep only items the model is reasonably sure about, OR a confirmed
-    # global threat-intel hit (those bypass model uncertainty).
     is_critical = (v == 'CRITICAL' and sev in ('CRITICAL', 'HIGH') and conf >= CRITICAL_CONFIDENCE_THRESHOLD)
     is_suspicious = (v == 'SUSPICIOUS' and conf >= SUSPICIOUS_CONFIDENCE_THRESHOLD)
 
@@ -165,8 +150,6 @@ async def handle_automation(agent, table, data, api_key, endpoint):
         logger.error(f"[!] Automation save FAILED agent={agent} table={table}: {e}")
 
 async def handle_manual(agent, table, data, api_key, endpoint):
-    # `data` may be a single row (dict) or a batch (list of rows). The server
-    # batches manual jobs to ~10 rows per Ollama call to keep ingest tractable.
     batch_size = len(data) if isinstance(data, list) else 1
     log_text = json.dumps(data, indent=2, default=str)
     logger.info(f"[*] Manual analysis START agent={agent} table={table} batch={batch_size}")
@@ -186,7 +169,6 @@ async def handle_manual(agent, table, data, api_key, endpoint):
         if extras:
             summary_line = f"{summary_line}\n  {' | '.join(extras)}"
     else:
-        # Manual scans always save SOMETHING (user explicitly requested it)
         summary_line = f"[MANUAL DEEP SCAN x{batch_size}] {raw[:1500] if raw else 'No response from AI service.'}"
 
     result_entry = {
@@ -201,9 +183,6 @@ async def handle_manual(agent, table, data, api_key, endpoint):
     except Exception as e:
         logger.error(f"[!] Manual save FAILED agent={agent} table={table}: {e}")
 
-# Actions the defensive AI is allowed to dispatch autonomously. Anything else
-# (e.g. DELETE_FILE, RUN_CMD) requires a human in the loop and is downgraded to
-# a recorded recommendation only.
 AUTONOMOUS_ACTIONS = {
     "BLOCK_IP",
     "KILL_PROCESS",
@@ -218,9 +197,6 @@ AUTONOMOUS_ACTIONS = {
     "CONTAINER_KILL",
 }
 
-# Confidence required before the AI is allowed to actually trigger the action.
-# Higher than the "save insight" floor so the system is stricter about acting
-# than about flagging.
 AUTONOMOUS_ACTION_CONFIDENCE = float(os.getenv("AI_AUTO_ACT_CONF", "0.75"))
 
 
@@ -235,21 +211,16 @@ async def handle_defensive(agent, table, data, api_key, endpoint):
     except Exception:
         conf = 0.0
 
-    # Only persist an actionable defensive recommendation; ignore MONITOR noise.
     if v != 'ACT' or conf < CRITICAL_CONFIDENCE_THRESHOLD:
         logger.info(f"[.] Skipped non-actionable (Defensive) for {agent}/{table} verdict={v} conf={conf}")
         return
 
-    # IMPORTANT: SoarHub UI scans for the "[AI DEFENSIVE ADVICE]" marker — the
-    # prefix here is load-bearing, do not rename without updating SoarHub.tsx.
     summary_line = _format_insight(verdict, "AI DEFENSIVE ADVICE")
     action = (verdict.get('action') or '').upper()
     target = verdict.get('target') or ''
     if target and target != 'none':
         summary_line = f"{summary_line} target={target}"
 
-    # Try to take real autonomous action when the model is confident enough and
-    # the requested action is on the safe-list. Anything else stays advisory.
     auto_dispatched = False
     if (
         action in AUTONOMOUS_ACTIONS
@@ -283,12 +254,10 @@ async def handle_defensive(agent, table, data, api_key, endpoint):
     except Exception as e:
         logger.error(f"[!] Defensive save FAILED agent={agent} table={table}: {e}")
 
-# AI processing lock to prevent multiple concurrent local LLM calls in one worker
 ai_semaphore = asyncio.Semaphore(1)
 
 async def process_message(message: aio_pika.IncomingMessage):
     async with message.process():
-        # Sequential processing per worker to save CPU
         async with ai_semaphore:
             try:
                 payload = json.loads(message.body.decode())
@@ -311,7 +280,6 @@ async def process_message(message: aio_pika.IncomingMessage):
                 elif WORKER_TYPE == "defensive":
                     await handle_defensive(agent, table, data, api_key, endpoint)
 
-                # Small sleep to let the CPU breathe between long LLM calls
                 await asyncio.sleep(0.5)
 
             except Exception as e:
@@ -331,7 +299,6 @@ async def main():
 
     async with connection:
         channel = await connection.channel()
-        # Conservative prefetch to prevent queue hoarding and CPU spikes
         await channel.set_qos(prefetch_count=1)
         queue = await channel.declare_queue(queue_name, durable=True)
         await queue.consume(process_message)

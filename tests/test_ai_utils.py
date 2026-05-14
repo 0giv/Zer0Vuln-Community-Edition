@@ -69,7 +69,6 @@ def test_analyze_with_ai_strips_and_returns_response_field(monkeypatch):
 
 
 def test_queue_soar_action_rejects_empty_inputs():
-    # No DB hit because we short-circuit on empty action/target.
     assert utils.queue_soar_action("agent1", "", "1.2.3.4") is False
     assert utils.queue_soar_action("agent1", "block_ip", "") is False
 
@@ -106,4 +105,4 @@ def test_is_critical_log_returns_summary_when_flagged(monkeypatch):
         endpoint="http://127.0.0.1:9",
     )
     assert "Lateral movement" in out
-    assert "Summary:" not in out  # prefix stripped
+    assert "Summary:" not in out

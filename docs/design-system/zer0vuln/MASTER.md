@@ -1,14 +1,13 @@
 # Design System Master File
 
-> **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.
-> If that file exists, its rules **override** this Master file.
-> If not, strictly follow the rules below.
+> Logic: when building a specific page, first check
+> `design-system/pages/[page-name].md`. If that file exists, its rules
+> override this Master file. Otherwise, follow the rules below.
 
 ---
 
-**Project:** Zer0Vuln
-**Generated:** 2026-03-23 16:19:43
-**Category:** B2B Service
+Project: Zer0Vuln
+Category: B2B Service
 
 ---
 
@@ -24,16 +23,14 @@
 | Background | `#ECFEFF` | `--color-background` |
 | Text | `#164E63` | `--color-text` |
 
-**Color Notes:** Fresh cyan + clean green
-
 ### Typography
 
-- **Heading Font:** Lexend
-- **Body Font:** Source Sans 3
-- **Mood:** corporate, trustworthy, accessible, readable, professional, clean
-- **Google Fonts:** [Lexend + Source Sans 3](https://fonts.google.com/share?selection.family=Lexend:wght@300;400;500;600;700|Source+Sans+3:wght@300;400;500;600;700)
+- Heading Font: Lexend
+- Body Font: Source Sans 3
+- Mood: corporate, trustworthy, readable, clean
 
-**CSS Import:**
+CSS Import:
+
 ```css
 @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&family=Source+Sans+3:wght@300;400;500;600;700&display=swap');
 ```
@@ -151,54 +148,32 @@
 
 ---
 
-## Style Guidelines
+## Anti-patterns (do not use)
 
-**Style:** Trust & Authority
-
-**Keywords:** Certificates/badges displayed, expert credentials, case studies with metrics, before/after comparisons, industry recognition, security badges
-
-**Best For:** Healthcare/medical landing pages, financial services, enterprise software, premium/luxury products, legal services
-
-**Key Effects:** Badge hover effects, metric pulse animations, certificate carousel, smooth stat reveal
-
-### Page Pattern
-
-**Pattern Name:** Enterprise Gateway
-
-- **Conversion Strategy:**  logo carousel,  tab switching for industries, Path selection (I am a...). Mega menu navigation. Trust signals prominent.
-- **CTA Placement:** Contact Sales (Primary) + Login (Secondary)
-- **Section Order:** 1. Hero (Video/Mission), 2. Solutions by Industry, 3. Solutions by Role, 4. Client Logos, 5. Contact Sales
+- Playful design
+- Hidden credentials
+- AI purple/pink gradients
+- Emojis as icons. Use SVG icons (Heroicons, Lucide, Simple Icons).
+- Missing `cursor: pointer`. All clickable elements must have
+  `cursor: pointer`.
+- Layout-shifting hovers. Avoid scale transforms that shift layout.
+- Low contrast text. Maintain a 4.5:1 minimum contrast ratio.
+- Instant state changes. Always use transitions (150-300 ms).
+- Invisible focus states. Focus states must be visible for a11y.
 
 ---
 
-## Anti-Patterns (Do NOT Use)
-
-- ❌ Playful design
-- ❌ Hidden credentials
-- ❌ AI purple/pink gradients
-
-### Additional Forbidden Patterns
-
-- ❌ **Emojis as icons** — Use SVG icons (Heroicons, Lucide, Simple Icons)
-- ❌ **Missing cursor:pointer** — All clickable elements must have cursor:pointer
-- ❌ **Layout-shifting hovers** — Avoid scale transforms that shift layout
-- ❌ **Low contrast text** — Maintain 4.5:1 minimum contrast ratio
-- ❌ **Instant state changes** — Always use transitions (150-300ms)
-- ❌ **Invisible focus states** — Focus states must be visible for a11y
-
----
-
-## Pre-Delivery Checklist
+## Pre-delivery checklist
 
 Before delivering any UI code, verify:
 
-- [ ] No emojis used as icons (use SVG instead)
-- [ ] All icons from consistent icon set (Heroicons/Lucide)
-- [ ] `cursor-pointer` on all clickable elements
-- [ ] Hover states with smooth transitions (150-300ms)
+- [ ] No emojis used as icons (SVG instead)
+- [ ] All icons from a consistent icon set (Heroicons or Lucide)
+- [ ] `cursor: pointer` on all clickable elements
+- [ ] Hover states with smooth transitions (150-300 ms)
 - [ ] Light mode: text contrast 4.5:1 minimum
 - [ ] Focus states visible for keyboard navigation
 - [ ] `prefers-reduced-motion` respected
-- [ ] Responsive: 375px, 768px, 1024px, 1440px
+- [ ] Responsive: 375 px, 768 px, 1024 px, 1440 px
 - [ ] No content hidden behind fixed navbars
 - [ ] No horizontal scroll on mobile

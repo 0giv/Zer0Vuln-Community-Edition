@@ -27,13 +27,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 
-# OSV endpoint config. Defaults match the public OSV API; override either by
-# setting env or by deploying a mirror that exposes the same /v1/query and
-# /v1/querybatch surface (e.g. an in-network OSV cache).
 OSV_PUBLIC_BASE = os.getenv("OSV_PUBLIC_URL", "https://api.osv.dev").rstrip("/")
 OSV_MIRROR_BASE = (os.getenv("OSV_MIRROR_URL") or "").rstrip("/")
-# OSV_MODE: "auto" (default — probe public, fall back to mirror),
-# "online" (force public), "mirror" (force mirror, fail loudly if missing).
 OSV_MODE = os.getenv("OSV_MODE", "auto").strip().lower()
 
 HTTP_TIMEOUT = 20
@@ -41,7 +36,6 @@ PROBE_TIMEOUT = 4
 BATCH_SIZE = 25
 ENC_PREFIX = "ENC::"
 
-# Resolved at boot via resolve_osv_endpoint(); read-only afterwards.
 _OSV_BASE: Optional[str] = None
 
 
@@ -64,9 +58,6 @@ def _probe(base: str) -> bool:
         return False
     try:
         r = requests.post(f"{base}/v1/query", json={}, timeout=PROBE_TIMEOUT)
-        # Reachable if we got ANY HTTP response — even a 4xx validation error
-        # proves the host is up. Only 5xx-and-above indicates the upstream
-        # itself is dead and we should fall back to the mirror.
         return r.status_code < 500
     except requests.RequestException:
         return False
@@ -88,13 +79,12 @@ def resolve_osv_endpoint() -> str:
     if OSV_MODE == "mirror":
         if not OSV_MIRROR_BASE:
             print("[vuln_scanner] OSV_MODE=mirror but OSV_MIRROR_URL is empty — scans will fail", flush=True)
-            _OSV_BASE = ""  # explicit empty → fail-fast in queries
+            _OSV_BASE = ""
             return _OSV_BASE
         _OSV_BASE = OSV_MIRROR_BASE
         print(f"[vuln_scanner] OSV_MODE=mirror → using {_OSV_BASE}", flush=True)
         return _OSV_BASE
 
-    # auto: probe public first (fast path for connected deployments)
     if _probe(OSV_PUBLIC_BASE):
         _OSV_BASE = OSV_PUBLIC_BASE
         print(f"[vuln_scanner] OSV reachable, using public API: {_OSV_BASE}", flush=True)
@@ -105,7 +95,6 @@ def resolve_osv_endpoint() -> str:
         print(f"[vuln_scanner] OSV public unreachable — falling back to mirror: {_OSV_BASE}", flush=True)
         return _OSV_BASE
 
-    # No reachable endpoint. Set to "" so query helpers can short-circuit.
     _OSV_BASE = ""
     print("[vuln_scanner] No reachable OSV endpoint (public unreachable, no mirror configured). Scans will be skipped.", flush=True)
     return _OSV_BASE
@@ -166,14 +155,12 @@ def _detect_ecosystem(os_info: Optional[str], pkgs: Optional[List[dict]] = None)
     if "arch" in s or "manjaro" in s:
         return "ARCH"
 
-    # Generic Linux (incl. WSL) → fingerprint via package versions.
     if "linux" in s and pkgs:
         sample = " ".join(((p.get("version") or "") for p in pkgs[:50]))
         if re.search(r"-\d+ubuntu\d", sample) or "deb" in sample.lower():
             return "Debian"
         if re.search(r"\.(el|fc)\d", sample):
             return "RPM"
-        # Default linux assumption: Debian (most common in our fleet).
         return "Debian"
 
     return None
@@ -236,7 +223,6 @@ def _build_triplets(rows: List[dict], ecosystem: str) -> List[Tuple[str, str, st
 def _batch_lookup(triples: List[Tuple[str, str, str, str, str]], ecosystem: str) -> Dict[Tuple[str, str], List[dict]]:
     result: Dict[Tuple[str, str], List[dict]] = {(b, v): [] for (b, v, _, _, _) in triples}
 
-    # Pass 1: name + normalized version
     q1 = [{"package": {"name": qn, "ecosystem": ecosystem}, "version": nv} for (_, _, qn, nv, _) in triples]
     if q1:
         for i, res in enumerate(_osv_query_batch(q1)):
@@ -245,7 +231,6 @@ def _batch_lookup(triples: List[Tuple[str, str, str, str, str]], ecosystem: str)
                 b, v = triples[i][0], triples[i][1]
                 result[(b, v)].extend(vulns)
 
-    # Pass 2: name + upstream-only when norm != upstream and pass 1 was empty
     q2_idx: List[int] = []
     q2: List[dict] = []
     for i, t in enumerate(triples):
@@ -296,7 +281,6 @@ def _hydrate_vuln_details(vuln_ids: List[str]) -> Dict[str, dict]:
                 detail = r.json() or {}
                 summary = (detail.get("summary") or "").strip()
                 if not summary:
-                    # Fall back to the long-form details, truncated.
                     raw = (detail.get("details") or "").strip()
                     summary = raw.split("\n")[0][:300] if raw else ""
                 payload = {
@@ -486,28 +470,18 @@ async def scan_agent(agent: str, fernet_key: str | bytes, connect_db_for_agent: 
     if not ecosystem or ecosystem == "ARCH":
         return {"agent": agent, "ecosystem": ecosystem, "packages": len(pkgs), "hits": 0, "inserted": 0, "skipped_reason": "unsupported_ecosystem"}
 
-    # OSV doesn't have a 'Windows' ecosystem — fall back to NuGet so common
-    # .NET libs at least get checked. Native EXEs/MSI won't match anything,
-    # which is expected (and matches the agent-side behavior).
     query_eco = ecosystem if ecosystem != "Windows" else "NuGet"
 
     triples = _build_triplets(pkgs, ecosystem)
     if not triples:
         return {"agent": agent, "ecosystem": ecosystem, "packages": len(pkgs), "hits": 0, "inserted": 0, "skipped_reason": "no_valid_triplets"}
 
-    # OSV calls are blocking — punt to a thread so the event loop stays responsive.
     binver_to_vulns = await asyncio.to_thread(_batch_lookup, triples, query_eco)
 
     await _ensure_vuln_table(agent, connect_db_for_agent)
-    # Backfill summaries for older findings inserted before the hydrate step
-    # existed. Cheap because the cache short-circuits on second scan.
     await _backfill_missing_summaries(agent, connect_db_for_agent)
     existing = await _existing_dup_fps(agent, connect_db_for_agent)
 
-    # Collect unique vuln IDs that aren't already persisted, then hydrate them
-    # with summary/details from OSV's /v1/vulns/<id>. Doing this BEFORE building
-    # `findings` means each CVE costs one extra HTTP call, not one per affected
-    # package (xz-utils alone can match 4+ packages with the same CVE ID).
     pending_ids: set = set()
     for (bin_name, installed_ver), vulns in binver_to_vulns.items():
         for v in vulns or []:

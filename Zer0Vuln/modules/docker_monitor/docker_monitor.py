@@ -14,7 +14,6 @@ except ImportError:
 import modules.enc_db as enc_db
 import modules.db as _db
 
-# Make sure enc_db knows to encrypt siem_events message if not already set by log_extractor
 enc_db.set_encrypt_fields_map({
     "siem_events": ["message"]
 })
@@ -100,9 +99,6 @@ def collect_container_inventory(client):
         containers = client.containers.list(all=True)
         for c in containers:
             try:
-                # Server-side state column is VARCHAR(64); the full dict repr
-                # ("{'Status': 'running', 'Running': True, ...}") overflows it.
-                # Surface only State.Status, which is what UIs care about.
                 state_str = (c.attrs.get('State') or {}).get('Status', '') or c.status
                 item = {
                     'container_id': c.id,
@@ -129,7 +125,6 @@ def _inventory_loop(client, stop_evt, interval=60):
             collect_container_inventory(client)
         except Exception as e:
             logger.error(f"Inventory loop error: {e}")
-        # Wait, but wake up promptly on shutdown
         stop_evt.wait(interval)
 
 
@@ -147,7 +142,6 @@ def monitor_docker_events():
             client.ping()
             logger.info("[+] Docker monitor connected to Docker daemon.")
 
-            # Initial snapshot, then start inventory thread.
             collect_container_inventory(client)
             inv_thread = threading.Thread(
                 target=_inventory_loop,
@@ -158,10 +152,6 @@ def monitor_docker_events():
             )
             inv_thread.start()
 
-            # NOTE: docker-py's events() does NOT accept a `timeout` kwarg.
-            # The generator blocks until an event arrives or the connection
-            # drops. The inventory snapshot runs on its own thread so we
-            # don't need to wake this loop periodically.
             for event in client.events(decode=True):
                 type_ = event.get('Type')
                 action = event.get('Action')
@@ -187,8 +177,6 @@ def monitor_docker_events():
                         logger.error(f"Error inserting docker event to DB: {db_err}")
 
                     if action in ('create', 'start', 'stop', 'kill', 'die'):
-                        # Inventory thread will catch this within `interval`,
-                        # but trigger an immediate refresh for snappy UI.
                         try:
                             collect_container_inventory(client)
                         except Exception as e:

@@ -1,4 +1,3 @@
-# modules/soar/soar.py
 # -*- coding: utf-8 -*-
 
 import platform
@@ -24,9 +23,6 @@ from modules.db import (
 
 from modules.soar.vnc_manager import VNCManager
 
-# ---------------------------------------------------------------------
-# SOAR çekirdeği
-# ---------------------------------------------------------------------
 
 class ActionType(Enum):
     BLOCK_IP        = "block_ip"
@@ -93,7 +89,6 @@ class SOARLogger:
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # basicConfig 1 kez set edilsin; tekrar importlarda patlatmasın
         logging.basicConfig(
             filename=str(log_path),
             level=logging.INFO,
@@ -480,7 +475,6 @@ class SOARAutomation:
         if not target:
             return False, "Empty process target"
 
-        # PID mi, isim mi?
         is_pid = False
         try:
             int(target)
@@ -525,7 +519,6 @@ class SOARAutomation:
             cmd = ["rundll32.exe", "user32.dll,LockWorkStation"]
             return self.executor.execute(cmd, "Lock workstation")
         elif self.system == "linux":
-            # Best effort: systemd ortamlarında tüm oturumları kilitle
             cmd = ["loginctl", "lock-sessions"]
             return self.executor.execute(cmd, "Lock machine sessions")
         else:
@@ -533,14 +526,12 @@ class SOARAutomation:
 
     def _isolate_host(self) -> Tuple[bool, str]:
         if self.system == "windows":
-            # Disable all non-loopback network adapters
             cmd = [
                 "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
                 "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Disable-NetAdapter -Confirm:$false"
             ]
             return self.executor.execute(cmd, "Isolate Windows Host")
         elif self.system == "linux":
-            # Block all outgoing traffic except loopback
             cmd = ["iptables", "-A", "OUTPUT", "!", "-o", "lo", "-j", "DROP"]
             success, msg = self.executor.execute(cmd, "Isolate Linux Host")
             if success:
@@ -613,7 +604,6 @@ class SOARAutomation:
             elif action == "stop":
                 cmd = ["docker", "stop", container_id]
             elif action == "network_disconnect":
-                # Isolate by disconnecting from all networks
                 inspect_cmd = ["docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", container_id]
                 ok, networks_str = self.executor.execute(inspect_cmd, f"Inspect container {container_id}")
                 if not ok: return False, networks_str
@@ -636,7 +626,6 @@ class SOARAutomation:
         if self.system == "windows":
             cmd = ["ipconfig", "/flushdns"]
         elif self.system == "linux":
-            # Attempt multiple common linux dns flush commands depending on the distro
             cmd = ["systemd-resolve", "--flush-caches"]
         else:
             return False, f"Unsupported OS for flush_dns: {self.system}"
@@ -659,7 +648,6 @@ class SOARAutomation:
             return False, "Target user required"
 
         if self.system == "windows":
-            # We need to query session ID first on Windows, this is a simplified logoff
             cmd = ["powershell", "-Command", f"$session = (quser | Where-Object {{$_ -match '{target_user}'}} | ForEach-Object {{($_ -split ' +')[2]}}); if ($session) {{ logoff $session }} else {{ throw 'Session not found for {target_user}' }}"]
         elif self.system == "linux":
             cmd = ["pkill", "-u", target_user]
@@ -686,7 +674,7 @@ class SOARAutomation:
                         shutil.rmtree(item)
                     deleted_count += 1
                 except Exception:
-                    pass # Ignore locked files like typical temp cleaners
+                    pass
             
             return True, f"Cleared {deleted_count} items from {temp_path}"
         except Exception as e:
@@ -701,7 +689,6 @@ class SOARAutomation:
         dump_file = str(qdir / f"memdump_{target_pid}_{int(time.time())}.dmp")
 
         if self.system == "windows":
-            # Assumes Procdump from Sysinternals is available in PATH or working dir
             cmd = ["procdump.exe", "-accepteula", "-ma", str(target_pid), dump_file]
         elif self.system == "linux":
             cmd = ["gcore", "-o", dump_file, str(target_pid)]
@@ -710,14 +697,12 @@ class SOARAutomation:
             
         ok, msg = self.executor.execute(cmd, f"Dump process {target_pid}")
         if ok:
-            # Some tools append the pid to the string (like gcore), so just generalize success
             return True, f"Memory dump initiated to {qdir}"
         return False, f"Failed to dump process (requires procdump/gcore): {msg}"
 
     def _suspend_process(self, target_pid: str) -> Tuple[bool, str]:
         if not target_pid: return False, "Target PID required"
         if self.system == "windows":
-            # Using Native PowerShell P/Invoke to suspend process without external Sysinternals
             ps_script = (
                 "$code = @\"\n"
                 "using System;\n"
@@ -740,14 +725,12 @@ class SOARAutomation:
     def _delete_registry_key(self, reg_path: str) -> Tuple[bool, str]:
         if not reg_path: return False, "Registry path required"
         if self.system == "windows":
-            # If it's a value, user should pass /v <ValName> in the target, or we just issue reg delete. We assume it's just a path or path + args
             cmd = f'reg delete "{reg_path}" /f'
             return self.executor.execute(cmd.split(), f"Delete Registry Key: {reg_path}")
         return False, "delete_registry_key is only supported on Windows."
 
     def _protect_shadows(self) -> Tuple[bool, str]:
         if self.system == "windows":
-            # Ransomware shield: denies execute access to vssadmin.exe
             cmd = ["icacls", r"C:\Windows\System32\vssadmin.exe", "/deny", "Everyone:(X)"]
             return self.executor.execute(cmd, "Protect Volume Shadow Copies")
         return False, "protect_shadows is only supported on Windows."
@@ -845,7 +828,7 @@ class SOARAutomation:
             )
             return ok, msg, None
 
-        if a == "isolate_host": # String literal or add to Enum
+        if a == "isolate_host":
             ok, msg = self._isolate_host()
             status = ActionStatus.SUCCESS if ok else ActionStatus.FAILED
             self.tracker.record_action(int(event_id or 0), ActionType.LOCK_MACHINE, "SELF", status, comment or msg, None)
@@ -968,11 +951,9 @@ class SOARAutomation:
             return ok, msg, None
 
         if a == ActionType.RUN_CMD.value:
-            # target bir komut listesi olmalı: ["whoami"] gibi
             if not isinstance(target, list) or not target:
                 return False, "RUN_CMD target must be a list", None
             ok, msg = self.executor.execute(target, "Run cmd")
-            # RUN_CMD için zorunlu DB kaydı yok; istersen ekleyebilirsin.
             return ok, msg, None
 
         return False, f"Unsupported action: {action}", None
@@ -992,7 +973,6 @@ class SOARAutomation:
         if not rows:
             return stats
 
-        # deterministik sıra
         rows = sorted(rows, key=lambda r: (str(r.get("timestamp") or ""), int(r.get("id") or 0)))
         batch = rows[:max_batch]
         stats["leased"] = len(batch)
@@ -1000,7 +980,6 @@ class SOARAutomation:
         for it in batch:
             aid = int(it.get("id") or 0)
             try:
-                # active'e çek
                 update_record("automations", {"status": "active"}, "id=%s", (aid,))
             except Exception as e:
                 self.logger.error(f"automation {aid} lease->active failed: {e}")
@@ -1241,9 +1220,6 @@ def main() -> None:
         raise
 
 
-# ---------------------------------------------------------------------
-# API Automations entegrasyonu
-# ---------------------------------------------------------------------
 
 
 def get_action_catalog() -> Dict[str, Dict[str, Any]]:
@@ -1394,7 +1370,6 @@ def execute_action_from_payload(
     except (ValueError, TypeError):
         event_id = None
 
-    # RUN_CMD için target normalize et
     if action == ActionType.RUN_CMD.value:
         target = _normalize_run_cmd_target(target)
 

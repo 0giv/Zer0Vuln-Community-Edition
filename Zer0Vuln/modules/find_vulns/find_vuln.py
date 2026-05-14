@@ -1,4 +1,3 @@
-# modules/find_vulns/find_vuln.py
 import os
 import sys
 import json
@@ -10,7 +9,6 @@ import requests
 import re
 from typing import List, Dict, Tuple, Optional
 
-# ---- ŞİFRELİ DB KATMANI ----
 import modules.enc_db as enc_db
 enc_db.add_encrypted_fields(
     "vulnerabilities_report",
@@ -27,7 +25,6 @@ TABLE               = "vulnerabilities_report"
 BATCH_SIZE          = 25
 HTTP_TIMEOUT        = 20
 
-# ---------- Yardımcılar ----------
 def make_dup_fp(pkg_name: str, pkg_version: str, vuln_id: str) -> str:
     raw = f"{pkg_name}|{pkg_version}|{vuln_id}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -44,7 +41,7 @@ def normalize_debianish_version(ver: str) -> Tuple[str, str]:
     """
     if not ver:
         return ver, ver
-    v = ver.split(":", 1)[-1]  # epoch sök (4:13.2.0-7ubuntu1 -> 13.2.0-7ubuntu1)
+    v = ver.split(":", 1)[-1]
     v = re.sub(r'-0?ubuntu\d+(?:\.\d+)?', '', v)
     v = re.sub(r'~ubuntu\d+(?:\.\d+)?', '', v)
     v = v.replace('ubuntu', '')
@@ -98,15 +95,12 @@ def osv_query_batch(queries: List[dict]) -> List[dict]:
             r.raise_for_status()
             data = r.json() or {}
             res = data.get("results") or []
-            # API garanti etmiyorsa hizalamayı koru
             if len(res) != len(chunk):
-                # güvenli tarafta kal: eksik olanları boşla
                 pad = [{"vulns": []} for _ in range(len(chunk) - len(res))]
                 res.extend(pad)
             results.extend(res)
         except requests.RequestException as exc:
             print(f"[OSV] batch failed (size={len(chunk)}): {exc} → falling back to single requests", file=sys.stderr)
-            # tek tek düş
             for q in chunk:
                 results.append(osv_check_single(q["package"]["name"], q["version"], q["package"]["ecosystem"]))
     return results
@@ -164,7 +158,6 @@ def batch_lookup_with_fallback(triples: List[Tuple[str, str, str, str, str]], ec
     """
     result_map: Dict[Tuple[str, str], List[dict]] = { (b,v): [] for (b,v,_,_,_) in triples }
 
-    # 1) source + normalized
     q1 = [{"package": {"name": qn, "ecosystem": ecosystem}, "version": nv} for (_,_,qn,nv,_) in triples]
     r1 = osv_query_batch(q1)
     for i, res in enumerate(r1):
@@ -173,10 +166,8 @@ def batch_lookup_with_fallback(triples: List[Tuple[str, str, str, str, str]], ec
         if vulns:
             result_map[(b, v)].extend(vulns)
 
-    # Hangi kayıtlar boş kaldı?
     pending_idxs = [i for i, t in enumerate(triples) if not result_map[(t[0], t[1])]]
 
-    # 2) source + upstream-only
     q2, idx2 = [], []
     for i in pending_idxs:
         b, v, qn, nv, up = triples[i]
@@ -192,7 +183,6 @@ def batch_lookup_with_fallback(triples: List[Tuple[str, str, str, str, str]], ec
             if vulns and not result_map[(b, v)]:
                 result_map[(b, v)].extend(vulns)
 
-    # 3) fallback: binary + normalized (source=binary olabilir)
     pending_idxs = [i for i, t in enumerate(triples) if not result_map[(t[0], t[1])]]
     q3, idx3 = [], []
     for i in pending_idxs:
@@ -218,7 +208,6 @@ def extract_ref_url(vuln: dict) -> str:
             return url
     return ""
 
-# ---------- Main ----------
 def main():
     ecosystem = detect_osv_ecosystem()
     print(f"[find_vuln] ecosystem={ecosystem}")
@@ -232,7 +221,6 @@ def main():
         return
 
     if ecosystem == "ARCH":
-        # TODO: separate path for Arch (arch-audit / security tracker). OSV doesn't have a standard 'Arch' ecosystem.
         print("[find_vuln] No dedicated path for ARCH ecosystem (skip).", file=sys.stderr)
         return
 
@@ -242,16 +230,12 @@ def main():
         print("[OSV] Unsupported or undetected ecosystem; only Debian/RPM/Alpine/Windows are processed.", file=sys.stderr)
         return
 
-    # Debian/Ubuntu binary→source map
     src_map = build_dpkg_source_map() if ecosystem == "Debian" else {}
     triples = to_query_triplets(pkg_rows, ecosystem or "NuGet", src_map)
 
-    # Toplu tarama + fallback
-    # Not: OSV API'de 'Windows' diye bir ecosystem olmayabilir. NuGet bir başlangıç olabilir.
     query_ecosystem = ecosystem if ecosystem != "Windows" else "NuGet"
     binver_to_vulns = batch_lookup_with_fallback(triples, query_ecosystem)
 
-    # Yaz: dedup + enc
     inserted = 0
     total_hits = 0
     for (bin_name, installed_ver), vulns in binver_to_vulns.items():
@@ -267,8 +251,8 @@ def main():
             summary = (v.get("summary") or "").strip()
             details_url = extract_ref_url(v)
             payload = {
-                "package_name": bin_name,           # raporda kurulu binary adını göster
-                "package_version": installed_ver,   # kurulu gerçek sürüm
+                "package_name": bin_name,
+                "package_version": installed_ver,
                 "vulnerability_id": vid,
                 "summary": summary,
                 "details_url": details_url,

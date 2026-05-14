@@ -23,7 +23,6 @@ from typing import List, Any
 from pydantic import BaseModel, EmailStr, constr, Field, field_validator
 from typing import Optional, List
 
-# --- Validation Models (V2.2.1 Implementation) ---
 class LoginRequest(BaseModel):
     username: constr(min_length=3, max_length=50)
     password: constr(min_length=6)
@@ -60,7 +59,6 @@ class ChangePasswordRequest(BaseModel):
             raise ValueError('Password must contain at least one number')
         return v
 
-# --- Original Imports and Setup ---
 import asyncio
 import requests
 import textwrap
@@ -73,14 +71,12 @@ from sanic import response
 from ldap3 import Server, Connection, ALL, Tls
 from ldap3.core.exceptions import LDAPSocketOpenError, LDAPBindError
 import ssl
-# Removed duplicate passlib import
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv, set_key, dotenv_values
  
 ENC_PREFIX = "enc::"
 ENV_PATH = pathlib.Path(".env")
 
-# --- Load Environment Variables Globally ---
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH)
 
@@ -97,13 +93,11 @@ app.config.REQUEST_TIMEOUT = 600
 app.config.WORKER_ACK_TIMEOUT = 60.0
 CORS(app, origins=CORS_ORIGINS)
 
-# --- Static File Serving (Defined Early for Priority) ---
 app.static("/assets", "./frontend/dist/assets", name="frontend_assets")
 app.static("/vite.svg", "./frontend/dist/vite.svg", name="frontend_logo")
 
 parser = argparse.ArgumentParser(description="App API")
 
-# --- AI Utilities ---
 from ai.utils import load_ai_config, is_critical_log, save_ai_results
 parser.add_argument(
     "-l", "--license",
@@ -112,20 +106,13 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Community Edition: no proprietary license server. LICENSE_KEY here is just
-# a *shared secret* used as the X-License-Key header for server↔agent calls
-# when an agent has not been enrolled (per-agent agent_keys are still preferred).
-# Auto-generated on first boot if missing.
-LICENSE_API_URL = ""  # legacy field, retained so existing call sites still wire up
+LICENSE_API_URL = ""
 LICENSE_KEY = args.license or os.getenv("LICENSE_KEY", "")
 
-# --- Ollama Setup ---
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/api")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
 if not LICENSE_KEY:
-    # Community edition: auto-generate a shared secret instead of bailing.
-    # Operators can override by setting LICENSE_KEY in .env.
     import secrets as _secrets
     LICENSE_KEY = _secrets.token_urlsafe(32)
     print(f"[+] Community edition: generated ephemeral agent shared secret (set LICENSE_KEY in .env to override).")
@@ -145,9 +132,6 @@ ENCRYPTED_FIELDS_MAP = {
     "security_audit": ["finding", "details"]
 }
 
-# Community Edition: SOAR is unconditionally enabled. Kept as a constant so
-# legacy `if not is_soar_enabled(): return _soar_block_response()` guards stay
-# valid no-ops without needing to be ripped out across hundreds of routes.
 SOAR_LICENSED = True
 
 async def init_hub_db():
@@ -161,7 +145,6 @@ async def init_hub_db():
                 cur.execute("CREATE DATABASE IF NOT EXISTS zer0vuln_hub")
                 cur.execute("USE zer0vuln_hub")
 
-                # hardware_inventory
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS hardware_inventory (
                         id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -177,7 +160,6 @@ async def init_hub_db():
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
                 """)
 
-                # threat_intel
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS threat_intel (
                         id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -265,8 +247,6 @@ def _soar_block_response():
     )
 
 
-# Allowed SOAR actions for automation.  
-# This set should mirror the action names supported by the SOAR module (see modules/soar/soar.py).
 AUTOMATION_ALLOWED_ACTIONS = {
     "block_ip",
     "unblock_ip",
@@ -381,11 +361,9 @@ async def _execute_automation_record(agent: str, rec: dict) -> dict:
     target = rec["target"].strip()
     event_id = int(rec["event_id"]) if rec.get("event_id") else None
 
-    # Automation prefix
     comment_prefix = f"automation#{rec['id']}"
     comment_full = f"{comment_prefix} | {rec.get('comment') or ''}".strip()
 
-    # Başlangıç durumu: active
     cnx = await connect_db_for_agent(agent)
     cur = await cnx.cursor()
     await cur.execute(
@@ -397,17 +375,15 @@ async def _execute_automation_record(agent: str, rec: dict) -> dict:
     await cnx.close()
 
     try:
-        # ✅ AGENT'A İSTEK GÖNDER
         result = await call_agent_soar(
             agent,
             action=action,
             target=target,
             comment=comment_full,
             event_id=event_id,
-            ttl=rec.get("ttl")  # eğer kayıtta TTL varsa
+            ttl=rec.get("ttl")
         )
 
-        # Sonuç parse
         ok = result.get("ok", False)
         auto_status = "completed" if ok else "failed"
         soar_status = result.get("status", "failed")
@@ -415,13 +391,11 @@ async def _execute_automation_record(agent: str, rec: dict) -> dict:
         expires_at = result.get("expires_at")
         msg_detail = result.get("message", "")
 
-        # Comment güncelle
         final_comment = _append_comment(
             rec.get("comment"),
             f"{comment_prefix} | {msg_detail}"
         )
 
-        # Automation kaydını güncelle
         cnx = await connect_db_for_agent(agent)
         cur = await cnx.cursor()
         await cur.execute(
@@ -447,7 +421,6 @@ async def _execute_automation_record(agent: str, rec: dict) -> dict:
         }
 
     except Exception as e:
-        # Hata durumu
         error_msg = str(e)
         final_comment = _append_comment(
             rec.get("comment"),
@@ -518,7 +491,6 @@ import io
 
 @app.get("/api/agent/download/<os_type>")
 async def download_agent(request, os_type):
-    # Security: Allow if authenticated user OR valid License Key OR valid per-agent key
     user_id = int(request.headers.get("X-User-ID", 0))
     provided_key = request.headers.get("X-License-Key") or request.args.get("license")
     agent_key = request.headers.get("X-Agent-Key") or request.args.get("agent_key")
@@ -547,24 +519,18 @@ async def download_agent(request, os_type):
     if not is_authed:
         return sanic_json({"status": "error", "message": "Unauthorized"}, status=403)
 
-    # Audit the download
     await audit_log(request, "DOWNLOAD_AGENT", os_type, f"Agent package requested for {os_type}")
 
-    # Determine Server IP from request if not explicitly set
     server_ip = request.host.split(':')[0]
     
-    # Use io.BytesIO to create the zip in memory
     memory_file = io.BytesIO()
     
     agent_root = pathlib.Path("Zer0Vuln")
     if not agent_root.exists():
         return sanic_json({"ok": False, "error": "Agent source not found"}, status=404)
 
-    # Only include essential files for the agent
     exe_name = "main.exe" if os_type == "windows" else "main"
 
-    # Fail fast if the prebuilt binary is missing — otherwise installers silently
-    # produce a broken service that points at a non-existent path.
     bin_path = agent_root / exe_name
     if not bin_path.exists():
         return sanic_json({
@@ -584,10 +550,8 @@ async def download_agent(request, os_type):
         for f_path in files_to_zip:
             abs_path = agent_root / f_path
             if abs_path.exists():
-                # Store db/init.sql in the db/ folder inside the zip
                 zf.write(abs_path, f_path)
 
-        # Inject Auto-Setup Script
         if os_type == "windows":
             setup_bat = f"""@echo off
 setlocal
@@ -688,13 +652,10 @@ echo "[+] Setup Complete! The Agent is now running in the background."
         }
     )
 
-# ────────────────────────────────────────────────────────────────────────────────
-# ENROLLMENT-TOKEN AGENT DEPLOYMENT (CrowdStrike/Wazuh-style)
-# ────────────────────────────────────────────────────────────────────────────────
 ENROLLMENT_TOKEN_TTL_HOURS = int(os.getenv("ENROLLMENT_TOKEN_TTL_HOURS", "24"))
 
 def _gen_token() -> str:
-    return secrets.token_hex(32)  # 64 hex chars
+    return secrets.token_hex(32)
 
 def _client_ip(request) -> str:
     fwd = request.headers.get("X-Forwarded-For", "")
@@ -726,7 +687,6 @@ async def _validate_agent_auth(request) -> str | None:
                 cur.close()
     except Exception as e:
         print(f"[Enroll] agent auth lookup error: {e}")
-    # Fallback to global
     if key == LICENSE_KEY:
         return "*"
     return None
@@ -742,9 +702,8 @@ async def enroll_agent(request):
     hostname_hint = (body.get("hostname_hint") or "").strip()[:255]
     note = (body.get("note") or "").strip()[:500]
     ttl_hours = int(body.get("ttl_hours") or ENROLLMENT_TOKEN_TTL_HOURS)
-    ttl_hours = max(1, min(ttl_hours, 24 * 30))  # 1h..30d
+    ttl_hours = max(1, min(ttl_hours, 24 * 30))
 
-    # Lookup username for the audit trail
     username = None
     try:
         with sync_mysql_conn("userdb") as conn:
@@ -821,7 +780,6 @@ async def list_enrollments(request):
             for k, v in list(r.items()):
                 if isinstance(v, datetime):
                     r[k] = v.strftime("%Y-%m-%d %H:%M:%S")
-            # Mask token in list view
             if r.get("token"):
                 r["token_preview"] = r["token"][:8] + "…" + r["token"][-4:]
                 del r["token"]
@@ -864,11 +822,9 @@ async def register_agent(request):
     os_type = (body.get("os_type") or "").strip()[:32] or None
     req_name = (body.get("agent_name") or "").strip()[:128] or None
 
-    # Validate name format if provided
     if req_name and not re.match(r"^[A-Za-z0-9_.-]{1,128}$", req_name):
         return sanic_json({"status": "error", "message": "Invalid agent_name"}, status=400)
 
-    # Atomic claim: check token -> issue identity -> mark used
     try:
         with sync_mysql_conn("userdb") as conn:
             cur = conn.cursor(dictionary=True)
@@ -886,12 +842,10 @@ async def register_agent(request):
                 if row["expires_at"] and row["expires_at"] < datetime.now():
                     return sanic_json({"status": "error", "message": "Token expired"}, status=410)
 
-                # Derive agent_name: requested OR hostname OR Agent-<short>
                 if not req_name:
                     base = hostname or f"Agent-{token[:8]}"
                     req_name = re.sub(r"[^A-Za-z0-9_.-]", "-", base)[:128] or f"Agent-{token[:8]}"
 
-                # Ensure uniqueness in agent_identities (append -<suffix> if taken)
                 final_name = req_name
                 suffix = 1
                 while True:
@@ -1079,9 +1033,6 @@ echo "[+] Zer0Vuln Agent installed and running as: $AGENT_NAME"
 
 
 def _render_windows_install(server_url: str, server_ip: str, token: str) -> str:
-    # Wrapped in `& { ... }` so `return` stops the scriptblock without killing the
-    # user's PowerShell window (important when invoked via `iwr ... | iex`).
-    # All `exit` usages removed in favour of `return`; failures caught and logged.
     return f"""# Zer0Vuln Agent - Token-Based Installer (Windows)
 & {{
     $ErrorActionPreference = "Stop"
@@ -1322,14 +1273,12 @@ class CustomEncoder(pyjson.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (datetime,)):
             return obj.strftime("%Y-%m-%d %H:%M:%S")
-        # Handle float timestamps (often used in logs or returned as float/str from DB)
         if isinstance(obj, float) and 1000000000 < obj < 2000000000:
             try:
                 return datetime.fromtimestamp(obj).strftime("%Y-%m-%d %H:%M:%S")
             except:
                 pass
         
-        # Handle string floats "1773482105.2989442"
         if isinstance(obj, str) and '.' in obj:
             try:
                 f_val = float(obj)
@@ -1412,10 +1361,8 @@ async def get_user_permissions(user_id: int) -> list:
         """, (user_id,))
         rows = await cursor.fetchall()
         await cursor.close(); await cnx.close()
-        # If user is admin, they might have all_permission which should translate to everything
         perms = [row[0] for row in rows]
         if 'all_permission' in perms:
-            # Optionally return all possible permissions or just keep all_permission
             pass
         return perms
     except Exception as e:
@@ -1437,7 +1384,6 @@ async def user_has_permission(user_id: int, permission_name: str) -> bool:
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
 
-        # Check for specific permission OR the 'all_permission' wildcard
         await cursor.execute("""
             SELECT COUNT(*) FROM users u
             JOIN roles r ON u.role = r.role_name
@@ -1460,7 +1406,6 @@ async def audit_log(request, action: str, resource: str, details: str = ""):
     user_id = int(request.headers.get("X-User-ID", 0))
     username = "Anonymous"
     
-    # Get IP address
     xff = request.headers.get("x-forwarded-for")
     if xff:
         ip = xff.split(",")[0].strip()
@@ -1487,7 +1432,6 @@ async def audit_log(request, action: str, resource: str, details: str = ""):
         await cursor.close(); await cnx.close()
         print(f"[DEBUG] audit_log: successful insertion")
 
-        # OpenSearch Indexing
         try:
             asyncio.create_task(os_utils.index_log(
                 agent="system", 
@@ -1720,7 +1664,6 @@ async def analyze_agent_logs(agent: str, limit: int = 100):
     except Exception as e:
         return {'success': False, 'error': f'Fernet key error: {e}'}
 
-    # Fetch data
     siem_rows   = await asyncio.to_thread(fetch_unsent_siem_logs, agent, limit)
     cf_rows     = await asyncio.to_thread(fetch_critical_files_data, agent, limit)
     alert_rows  = await asyncio.to_thread(fetch_events_alert_data, agent, limit)
@@ -1728,7 +1671,6 @@ async def analyze_agent_logs(agent: str, limit: int = 100):
     soar_rows   = await asyncio.to_thread(fetch_soar_actions_data, agent, limit)
 
     all_logs = []
-    # Add table name to each row for the worker
     for r in siem_rows:  all_logs.append(("siem_events", r))
     for r in cf_rows:    all_logs.append(("critical_files", r))
     for r in alert_rows: all_logs.append(("events_alert", r))
@@ -1738,9 +1680,6 @@ async def analyze_agent_logs(agent: str, limit: int = 100):
     if not all_logs:
         return {'success': True, 'message': 'No new logs to analyze.', 'logs_analyzed': 0}
 
-    # Group logs by table, then push batches of N in a single queue message so
-    # the slow local LLM does ~1 call per batch instead of 1 per log
-    # (238 logs went from 238 Ollama calls -> ~24 calls).
     chunk_size = 10
     pushed_count = 0
     msgs_published = 0
@@ -1777,14 +1716,9 @@ async def analyze_selected_logs(agent: str, logs: list):
 
     pushed_count = 0
     for log in logs:
-        # log format: { table: "...", data: {...} }
         table = log.get("table")
         data  = log.get("data")
         if table and data:
-            # Re-decrypt if it's coming from a potentially double-encrypted source, 
-            # though usually the UI sends already decrypted data back. 
-            # However, for security, we should never trust the UI's decryption.
-            # IN THIS CASE: The UI sends the ID, and we fetch/decrypt from DB.
             log_id = data.get("id")
             if log_id:
                 row = await asyncio.to_thread(fetch_one_log_from_db, agent, table, log_id)
@@ -1812,7 +1746,6 @@ def fetch_one_log_from_db(agent, table, log_id):
 
 async def analyze_all_agents_logs():
     try:
-        # Get all agents (Thread to avoid blocking)
         def get_agents():
             with sync_mysql_conn() as conn:
                 cursor = conn.cursor()
@@ -1825,7 +1758,6 @@ async def analyze_all_agents_logs():
 
         agents = await asyncio.to_thread(get_agents)
         
-        # Parallel analysis using asyncio.gather for MAXIMUM SPEED
         tasks = [analyze_agent_logs(agent) for agent in agents]
         agent_results = await asyncio.gather(*tasks, return_exceptions=True)
         
@@ -1916,12 +1848,6 @@ def dispatch_all_critical_alerts():
         print(f"[!] Error in dispatch_all_critical_alerts: {e}")
         return 0
 
-# --- Connection-safety helpers ---
-# Many legacy code paths open a raw mysql.connector or aiomysql connection and
-# then rely on close() being reached sequentially. When an exception is raised
-# between connect() and close(), the connection is leaked and the server
-# eventually hits MySQL's max_connections cap (1040 "Too many connections").
-# These helpers give us guaranteed cleanup without refactoring every call site.
 def _close_sync_quiet(conn):
     try:
         if conn is not None:
@@ -1967,22 +1893,10 @@ async def agent_conn(agent: str):
         await _close_async_quiet(cnx)
 
 
-# Database connection functions
-#
-# MySQL "1040: Too many connections" fix: ~80 call sites open connections via
-# connect_userdb() / connect_db_for_agent() and close them manually. If an
-# exception is raised between connect and close (and there's no finally:), the
-# connection is leaked. Over time MySQL's max_connections cap is reached.
-#
-# Rather than retrofit every call site, we back these two factories with an
-# async connection pool. The returned object is a _PooledConn proxy whose
-# .close() releases the connection to the pool instead of tearing down the
-# socket. Pool capacity caps total concurrent connections, so leaks can no
-# longer unbounded-drift past max_connections.
 import collections
 
-_POOL_MAXSIZE      = 10   # per-DB cap on concurrent open connections
-_POOL_IDLE_SEC     = 60   # drop idle conns older than this on next acquire
+_POOL_MAXSIZE      = 10
+_POOL_IDLE_SEC     = 60
 
 
 class _PooledConn:
@@ -2002,15 +1916,9 @@ class _PooledConn:
         await self._pool.release(self._conn)
 
     def __getattr__(self, name):
-        # Delegate cursor(), commit(), rollback(), etc. to the real connection.
         return getattr(self._conn, name)
 
     def __del__(self):
-        # Safety net: if a caller forgot `await close()` (e.g. raised mid-request
-        # without a finally), the proxy is GC'd — synchronously return the conn
-        # to the pool so the semaphore doesn't leak. deque.append and
-        # Semaphore.release are both sync-safe. Rollback is skipped here; the
-        # next acquire() will roll back defensively.
         if self._released:
             return
         try:
@@ -2025,7 +1933,7 @@ class _AsyncMySQLPool:
     def __init__(self, factory, maxsize=_POOL_MAXSIZE, max_idle_sec=_POOL_IDLE_SEC):
         self._factory = factory
         self._sem = asyncio.Semaphore(maxsize)
-        self._idle = collections.deque()   # (conn, last_used_ts)
+        self._idle = collections.deque()
         self._lock = asyncio.Lock()
         self._max_idle_sec = max_idle_sec
 
@@ -2042,19 +1950,15 @@ class _AsyncMySQLPool:
                         except Exception:
                             pass
                         continue
-                    # Defensive rollback: previous borrower may have been
-                    # reclaimed via __del__ without a clean rollback.
                     try:
                         await conn.rollback()
                     except Exception:
-                        # Connection is dead — drop it, loop to the next.
                         try:
                             await conn.close()
                         except Exception:
                             pass
                         continue
                     return _PooledConn(conn, self)
-            # No healthy idle conn — open a new one.
             conn = await self._factory()
             return _PooledConn(conn, self)
         except BaseException:
@@ -2062,7 +1966,6 @@ class _AsyncMySQLPool:
             raise
 
     async def release(self, conn):
-        # Roll back any open transaction so the next borrower starts clean.
         try:
             await conn.rollback()
         except Exception:
@@ -2097,7 +2000,6 @@ def _make_agent_factory(agent: str):
                 password=DB_PASSWORD, database=db_name,
             )
         except Exception:
-            # Some agents were registered without the 'Agent_' prefix.
             if agent.startswith("Agent_"):
                 alt_db = f"{agent[6:]}_db"
                 return await connect(
@@ -2126,13 +2028,6 @@ async def connect_userdb():
         _userdb_pool = _AsyncMySQLPool(_make_userdb_factory())
     return await _userdb_pool.acquire()
 
-# --- Community Edition: local Fernet key manager ---
-#
-# The proprietary license server has been removed in favour of a self-hosted
-# key file. The first boot generates a fresh Fernet key under FERNET_KEY_PATH
-# (default `<repo>/data/fernet.key`); subsequent boots reuse it. Operators
-# rotating keys must stop the server, delete the file, restart — but any
-# encrypted-at-rest data written under the old key becomes unreadable.
 _FERNET_KEY_PATH = os.getenv(
     "FERNET_KEY_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fernet.key"),
@@ -2154,7 +2049,6 @@ def load_or_create_fernet_key() -> str:
                 return key.decode("utf-8") if isinstance(key, bytes) else key
         except Exception as e:
             print(f"[!] Could not read existing Fernet key at {path}: {e}", flush=True)
-    # First boot: generate.
     key = Fernet.generate_key()
     try:
         with open(path, "wb") as f:
@@ -2169,8 +2063,6 @@ def load_or_create_fernet_key() -> str:
     return key.decode("utf-8")
 
 
-# Backwards-compatible shim: old call sites pass `(license_api_url, license_key, ...)`.
-# We ignore those args and just hand back the local key.
 def fetch_fernet_key_from_license_api(license_api_url: str = "", license_key: str = "",
                                       header_name: str = "X-License-Key", timeout: int = 6) -> str:
     return load_or_create_fernet_key()
@@ -2210,7 +2102,6 @@ class _CommunityLicenseClient:
         return self._fernet_key
 
     def validate_or_exit(self):
-        # Always valid — we just warm the key cache so first telemetry fetch is fast.
         self.get_fernet_key()
         print("[+] Zer0Vuln Community Edition — local key initialised.")
 
@@ -2218,7 +2109,6 @@ class _CommunityLicenseClient:
 license_client = _CommunityLicenseClient()
 
 
-# Yeni: Boot'ta lisansı doğrula ve cache'e koy
 @app.before_server_start
 async def setup_db_pool(app):
     print(f"[*] Initializing database connection pool to {DB_HOST}...")
@@ -2235,12 +2125,10 @@ async def setup_db_pool(app):
 
 @app.exception(Exception)
 async def handle_exception(request, exception):
-    # Pass through standard Sanic exceptions (404, 405 etc)
     if hasattr(exception, "status_code") and exception.status_code in (404, 405):
         return None
 
     status_code = getattr(exception, "status_code", 500)
-    # Log the error internally
     print(f"[!] Unhandled Exception: {exception}")
     return sanic_json({
         "status": "error",
@@ -2250,8 +2138,6 @@ async def handle_exception(request, exception):
 
 @app.before_server_start
 async def init_local_keys(app):
-    # Community edition: warm the local Fernet key cache. No license server
-    # round-trip; first call generates the key on disk if missing.
     await asyncio.to_thread(license_client.validate_or_exit)
     app.ctx.fernet_key = license_client.get_fernet_key()
 
@@ -2263,9 +2149,8 @@ async def close_db_pool(app):
         app.ctx.db_pool.close()
         await app.ctx.db_pool.wait_closed()
 
-# Helper: bir row dict içindeki belirtilen alanları çöz
 def decrypt_row_fields(row: dict, encrypted_fields: list, fernet: Fernet) -> dict:
-    out = dict(row)  # kopya
+    out = dict(row)
     for field in encrypted_fields or []:
         if field not in out:
             continue
@@ -2273,25 +2158,21 @@ def decrypt_row_fields(row: dict, encrypted_fields: list, fernet: Fernet) -> dic
         if not isinstance(val, str):
             continue
         if not val.startswith(ENC_PREFIX):
-            # plaintext ya da farklı format
             continue
         token_b64 = val[len(ENC_PREFIX):]
         try:
             pt = fernet.decrypt(token_b64.encode("utf-8"))
-            # Kaydederken JSON'a sardığımız için burayı JSON parse et
             try:
                 decoded = pyjson.loads(pt.decode("utf-8"))
             except Exception:
                 decoded = pt.decode("utf-8")
             out[field] = decoded
         except InvalidToken:
-            # çözülemedi; orijinal değeri bırak
             out[field] = val
     return out
 
-# Yeni fonksiyon: stream_from_db'e alternatif, şifre çözerek döndürür
 async def stream_from_db_dec(table: str, agent: str,
-                             connect_db_for_agent,   # callable: (agent) -> async connection
+                             connect_db_for_agent,
                              license_api_url: str,
                              license_key: str,
                              encrypted_fields: list = None,
@@ -2304,25 +2185,20 @@ async def stream_from_db_dec(table: str, agent: str,
     - encrypted_fields: o tablonun şifrelenen sütunlarının isim listesi, örn: ["message","path"]
     """
     try:
-        # 1) Fernet anahtarını al (önce cache, yoksa API)
         key_b64 = getattr(app.ctx, "fernet_key", None)
         if not key_b64:
             key_b64 = license_client.get_fernet_key()
         fernet_obj = Fernet(key_b64.encode("utf-8") if isinstance(key_b64, str) else key_b64)
 
-        # 2) DB'ye bağlan ve veriyi çek
         cnx = await connect_db_for_agent(agent)
         cursor = await cnx.cursor()
 
-        # Sınırlandırma ve son kayıtları getirme (performans için)
         query = f"SELECT * FROM {table} ORDER BY id DESC"
         if limit is not None:
             query += f" LIMIT {limit}"
         try:
             await cursor.execute(query)
         except Exception as qerr:
-            # Gracefully return [] when the table does not exist on this agent yet
-            # (e.g. agent never sent that telemetry, or schema migration pending)
             err_str = str(qerr)
             if "1146" in err_str or "doesn't exist" in err_str.lower():
                 await cursor.close(); await cnx.close()
@@ -2333,11 +2209,9 @@ async def stream_from_db_dec(table: str, agent: str,
         await cursor.close()
         await cnx.close()
 
-        # 3) satırları dict'e çevir ve şifreli alanları çöz
         dict_rows = [dict(zip(columns, row)) for row in rows]
 
         if encrypted_fields is None:
-            # sensible defaults
             default_map = {
                 "siem_events": ["message"],
                 "critical_files": ["path","owner","grp","permissions","last_opened"],
@@ -2356,7 +2230,6 @@ async def stream_from_db_dec(table: str, agent: str,
                     if old_k in r:
                         r[new_k] = r.pop(old_k)
 
-        # 4) JSON döndür
         body = '[' + ','.join([pyjson.dumps(r, cls=CustomEncoder, ensure_ascii=False) for r in dec_rows]) + ']'
         return HTTPResponse(body=body, content_type="application/json; charset=utf-8")
 
@@ -2396,11 +2269,8 @@ import psutil
 @app.route("/server/resources", methods=["GET"])
 async def get_server_resources(request):
     try:
-        # interval=None returns the average CPU usage since the last call, without blocking.
-        # This prevents the metric from measuring the CPU spike caused by the request itself.
         cpu = psutil.cpu_percent(interval=None) 
         ram = psutil.virtual_memory().percent
-        # We look at the /host_disk if it exists (mounted via docker)
         disk_path = '/host_disk' if os.path.exists('/host_disk') else '/'
         try:
             disk = psutil.disk_usage(disk_path).percent
@@ -2446,7 +2316,6 @@ async def get_hardware_inventory(request, agent):
 @require_permission("read_telemetry")
 @app.route("/api/agent/<agent>/inventory/software")
 async def get_software_inventory(request, agent):
-    # Mapping 'package' to 'name' for frontend Assets.tsx
     fields = ENCRYPTED_FIELDS_MAP.get("packages")
     return await stream_from_db_dec("packages", agent, connect_db_for_agent, LICENSE_API_URL, LICENSE_KEY, 
                                    encrypted_fields=fields, rename_map={"package": "name"})
@@ -2454,7 +2323,6 @@ async def get_software_inventory(request, agent):
 @require_permission("read_telemetry")
 @app.route("/api/agent/<agent>/inventory/network")
 async def get_network_inventory(request, agent):
-    # Use network_connections table
     return await stream_from_db_dec("network_connections", agent, connect_db_for_agent, LICENSE_API_URL, LICENSE_KEY)
 
 @require_permission("read_telemetry")
@@ -2476,7 +2344,6 @@ async def create_role(request):
     data = request.json or {}
     role_name = data.get("role_name")
     
-    # Identify the creator from headers
     admin_id = request.headers.get("X-User-ID")
     created_by = "System"
 
@@ -2486,7 +2353,6 @@ async def create_role(request):
             "message": "Role name is required."
         }, status=400)
 
-    # Prevent creating default roles that have special logic
     if role_name in ["admin", "user", "guest"]:
         return sanic_json({
             "status": "error",
@@ -2497,14 +2363,12 @@ async def create_role(request):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
 
-        # Fetch admin username for 'created_by' field
         if admin_id:
             await cursor.execute("SELECT username FROM users WHERE id = %s", (admin_id,))
             admin_row = await cursor.fetchone()
             if admin_row:
                 created_by = admin_row[0]
 
-        # Check if role already exists
         await cursor.execute("SELECT id FROM roles WHERE role_name = %s", (role_name,))
         if await cursor.fetchone():
             await cursor.close()
@@ -2514,7 +2378,6 @@ async def create_role(request):
                 "message": f"Role '{role_name}' already exists."
             }, status=409)
 
-        # Insert new role
         await cursor.execute("""
             INSERT INTO roles (role_name, created_by, created_at)
             VALUES (%s, %s, NOW())
@@ -2548,19 +2411,16 @@ async def create_user(request):
         password = user_data.password
         role = user_data.role
     except Exception as e:
-        # Check if it's a Pydantic ValidationError to format it cleanly
         if hasattr(e, 'errors') and callable(e.errors):
             errors = e.errors()
             if len(errors) > 0 and 'msg' in errors[0]:
                 clean_msg = errors[0]['msg']
-                # Pydantic often prefixes with "Value error, " which we can strip
                 if clean_msg.startswith("Value error, "):
                     clean_msg = clean_msg[len("Value error, "):]
                 return sanic_json({"status": "error", "message": clean_msg}, status=400)
                 
         return sanic_json({"status": "error", "message": f"Invalid input: {str(e)}"}, status=400)
     
-    # Identify the creator from headers
     admin_id = request.headers.get("X-User-ID")
     created_by = "System"
 
@@ -2568,14 +2428,12 @@ async def create_user(request):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
 
-        # Fetch admin username for 'created_by' field
         if admin_id:
             await cursor.execute("SELECT username FROM users WHERE id = %s", (admin_id,))
             admin_row = await cursor.fetchone()
             if admin_row:
                 created_by = admin_row[0]
 
-        # Role validation (dynamic)
         allowed_roles = await get_allowed_roles()
         if role not in allowed_roles:
             await cursor.close(); await cnx.close()
@@ -2584,7 +2442,6 @@ async def create_user(request):
                 "message": f"Invalid role. Allowed roles: {', '.join(allowed_roles)}"
             }, status=400)
 
-        # Check if username already exists
         await cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
         if await cursor.fetchone():
             await cursor.close()
@@ -2594,10 +2451,8 @@ async def create_user(request):
                 "message": "Username already exists."
             }, status=409)
 
-        # Hash the password
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-        # Insert new user
         await cursor.execute("""
             INSERT INTO users (username, password, role, created_by, created_at)
             VALUES (%s, %s, %s, %s, NOW())
@@ -2608,7 +2463,6 @@ async def create_user(request):
         await cursor.close()
         await cnx.close()
 
-        # Audit the user creation
         await audit_log(request, "CREATE_USER", username, f"Role assigned: {role}")
 
         return sanic_json({
@@ -2641,7 +2495,6 @@ async def update_user_role(request, user_id):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
 
-        # Check if user exists and get current role
         await cursor.execute("SELECT username, role FROM users WHERE id = %s", (user_id,))
         user_info = await cursor.fetchone()
 
@@ -2655,7 +2508,6 @@ async def update_user_role(request, user_id):
 
         username, current_role = user_info
 
-        # Prevent removing admin role from last admin
         if current_role == "admin" and new_role != "admin":
             await cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
             admin_count = (await cursor.fetchone())[0]
@@ -2668,7 +2520,6 @@ async def update_user_role(request, user_id):
                     "message": "Cannot remove admin role from the last admin user."
                 }, status=403)
 
-        # Update user role
         await cursor.execute("""
             UPDATE users
             SET role = %s, updated_by = %s, updated_at = NOW()
@@ -2721,7 +2572,6 @@ async def admin_reset_password(request, user_id):
 @require_permission("manage_users")
 @app.route("/users/<user_id>", methods=["DELETE"])
 async def delete_user(request, user_id):
-    # Identify the burner from headers
     admin_id = request.headers.get("X-User-ID")
     
     try:
@@ -2733,7 +2583,6 @@ async def delete_user(request, user_id):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
 
-        # Check if user exists
         await cursor.execute("SELECT username, role FROM users WHERE id = %s", (target_uid,))
         user = await cursor.fetchone()
 
@@ -2743,7 +2592,6 @@ async def delete_user(request, user_id):
 
         username, role = user
         if role == "admin":
-            # Admin silinecekse en az bir admin kalmalı
             await cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
             admin_count = (await cursor.fetchone())[0]
             if admin_count <= 1:
@@ -2972,8 +2820,6 @@ async def analyze_selected_logs_route(request, agent):
 async def get_all_ai_insights(request):
     """Fetch latest AI insights from all agent databases"""
     try:
-        # Use sync_mysql_conn (root) so SHOW DATABASES sees every per-agent DB.
-        # userdb_conn is scoped to userdb and was returning an empty list.
         def get_agent_names():
             with sync_mysql_conn() as conn:
                 cursor = conn.cursor()
@@ -2999,8 +2845,6 @@ async def get_all_ai_insights(request):
                         """, (f"{agent}_db",))
 
                         if await acur.fetchone():
-                            # Add the column on existing tables (idempotent — pre-source_data
-                            # deployments still have the old schema).
                             try:
                                 await acur.execute(
                                     "ALTER TABLE ai_analysis_results ADD COLUMN source_data LONGTEXT NULL"
@@ -3023,13 +2867,9 @@ async def get_all_ai_insights(request):
                     finally:
                         await acur.close()
             except Exception as e:
-                # Visibility: silently skipping per-agent failures was hiding
-                # the reason the global feed showed up empty in the UI.
                 print(f"[!] ai-insights skip agent={agent}: {e}", flush=True)
                 continue
 
-        # Tolerate rows with missing created_at (would otherwise crash the sort
-        # and 500 the whole endpoint).
         sorted_results = sorted(
             all_results,
             key=lambda x: x.get('created_at') or '',
@@ -3058,7 +2898,6 @@ async def get_ai_config(request, agent):
                 'updated_at': None
             }
         
-        # Don't expose sensitive data like API key (unless it's just 'ollama')
         is_ollama_key = config.get('api_key') == 'ollama'
         safe_config = {
             'model_name': config.get('model_name') or OLLAMA_MODEL,
@@ -3142,21 +2981,15 @@ async def set_ai_config(request, agent):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
         
-        # Check if we should update the key or keep the old one if not provided
         if not api_key:
-            # For Ollama, we use a dummy key
             if "ollama" in data.get('endpoint', '').lower() or "11434" in data.get('endpoint', ''):
                 api_key = "ollama"
             else:
-                # Try to keep existing key if not provided in update
                 await cursor.execute("SELECT api_key FROM ai_config ORDER BY updated_at DESC LIMIT 1")
                 row = await cursor.fetchone()
                 if row:
                     api_key = row[0]
 
-        # Insert or update AI configuration
-        # Using model_name as key logic: if user changes it, we insert a new record or update the latest.
-        # Here we just keep one global config for simplicity.
         await cursor.execute("""
             INSERT INTO ai_config (model_name, api_key, endpoint, updated_at)
             VALUES (%s, %s, %s, NOW())
@@ -3323,7 +3156,6 @@ async def set_email_config(request):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
         
-        # Insert or update email configuration
         query = """
             INSERT INTO email_config (smtp_server, smtp_port, smtp_user, smtp_password, 
                                     smtp_use_tls, email_from, email_to, updated_at)
@@ -3379,7 +3211,6 @@ async def log_login_attempt(username, auth_type, status, reason, ip_address):
         print(f"[!] Error: {e}")
 
 
-# --- SOAR ACTIONS: mark as RESOLVED ---
 @app.route("/<agent>/soar_actions/<action_id>/resolve", methods=["PATCH"])
 async def resolve_soar_action(request, agent, action_id):
     if not is_soar_enabled():
@@ -3387,7 +3218,6 @@ async def resolve_soar_action(request, agent, action_id):
     try:
         data = request.json or {}
         raw_ts = (data.get("resolved_at") or "").strip()
-        # ISO → MySQL uyumlu: "YYYY-MM-DD HH:MM:SS"
         if raw_ts:
             ts = raw_ts.replace("T", " ").rstrip("Z")
         else:
@@ -3410,7 +3240,6 @@ async def resolve_soar_action(request, agent, action_id):
             await cnx.close()
             return sanic_json({"status": "error", "message": "SOAR action not found"}, status=404)
 
-        # Güncellenmiş kaydı döndür
         cur2 = await cnx.cursor()
         await cur2.execute("SELECT * FROM soar_actions WHERE id = %s", (action_id,))
         columns = [c[0] for c in cur2.description]
@@ -3424,7 +3253,6 @@ async def resolve_soar_action(request, agent, action_id):
         return sanic_json({"status": "error", "message": str(e)}, status=500)
 
 
-# --- (opsiyonel ama UI'nin beklediği) mark as SENT ---
 @app.route("/<agent>/soar_actions/<action_id>/send", methods=["PATCH"])
 async def mark_soar_action_sent(request, agent, action_id):
     if not is_soar_enabled():
@@ -3501,13 +3329,11 @@ async def execute_automation(request, agent, auto_id):
         if rec["status"] not in ("pending", "paused", "failed", "active"):
             return sanic_json({"error": f"cannot execute in status={rec['status']}"}, status=409)
 
-        # 2) aktif olarak işaretle (UI’ya anlık geri bildirim)
         cnx = await connect_db_for_agent(agent)
         cur = await cnx.cursor()
         await cur.execute("UPDATE automations SET status='active', updated_at=NOW() WHERE id=%s", (auto_id,))
         await cnx.commit(); await cur.close(); await cnx.close()
 
-        # 3) AJAN’A ÇAĞRI
         prefix = f"automation#{rec['id']}"
         result = await call_agent_soar(
             agent,
@@ -3517,7 +3343,6 @@ async def execute_automation(request, agent, auto_id):
             event_id=rec.get("event_id"),
         )
 
-        # 4) sonucu commit et
         auto_status = "completed" if result.get("ok") else "failed"
         final_comment = (rec.get("comment") or "").strip()
         if result.get("message"):
@@ -3564,7 +3389,6 @@ async def run_due_automations(request, agent):
 
         results = []
         for rec in rows or []:
-            # active’e çek
             cnx = await connect_db_for_agent(agent)
             cur = await cnx.cursor()
             await cur.execute("UPDATE automations SET status='active', updated_at=NOW() WHERE id=%s", (rec["id"],))
@@ -3631,7 +3455,6 @@ async def report_automation_result(request, agent=None):
         status = data.get("status", "SUCCESS").upper()
         output = data.get("output", "")
         
-        # Eğer agent URL'den gelmiyorsa datadan al
         if not agent:
             agent = data.get("metadata", {}).get("agent")
             
@@ -3641,7 +3464,6 @@ async def report_automation_result(request, agent=None):
         cnx = await connect_db_for_agent(agent)
         cur = await cnx.cursor()
         
-        # Hem soar_actions hem automations tablosunu güncellemeye çalış (hangisi varsa)
         query_soar = "UPDATE soar_actions SET status = %s, comment = %s, updated_at = NOW() WHERE id = %s"
         query_auto = "UPDATE automations SET status = %s, comment = %s, updated_at = NOW() WHERE id = %s"
         
@@ -3671,12 +3493,10 @@ def _to_mysql_ts(raw: str | None) -> str | None:
     s = s.replace("T", " ")
     if s.endswith("Z"):
         s = s[:-1]
-    # "YYYY-MM-DD HH:MM:SS" formuna indir
     try:
         dt = datetime.fromisoformat(s)
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        # Son çare: sadece saniyeye kadar kırp
         return s[:19]
 
 @require_permission("manage_soar")
@@ -3705,19 +3525,15 @@ async def fixed_list_automations(request, agent):
 
         all_data = []
 
-        # 1) Automations
         try:
-            # Try full schema
             await cur.execute("SELECT id, device, event_id, action, target, comment, status, `timestamp`, payload, created_at, updated_at, 'automation' as source FROM automations WHERE device = %s ORDER BY id DESC LIMIT %s", (agent, limit))
             cols = [d[0] for d in cur.description]
             all_data.extend([dict(zip(cols, r)) for r in await cur.fetchall()])
         except:
-            # Fallback for old schema
             await cur.execute("SELECT id, device, event_id, action, target, comment, status, `timestamp`, payload, created_at, created_at as updated_at, 'automation' as source FROM automations WHERE device = %s ORDER BY id DESC LIMIT %s", (agent, limit))
             cols = [d[0] for d in cur.description]
             all_data.extend([dict(zip(cols, r)) for r in await cur.fetchall()])
 
-        # 2) Soar Actions
         rows_soar = []
         try:
             await cur.execute("SELECT id, action, target, comment, status, `timestamp`, created_at, updated_at, 'manual' as source FROM soar_actions ORDER BY id DESC LIMIT %s", (limit,))
@@ -3730,7 +3546,6 @@ async def fixed_list_automations(request, agent):
 
         await cur.close(); await cnx.close()
 
-        # Normalize soar rows and add to all_data
         for r in rows_soar:
             r["device"] = agent
             r["event_id"] = 0
@@ -3738,7 +3553,6 @@ async def fixed_list_automations(request, agent):
             if "updated_at" not in r: r["updated_at"] = r.get("created_at")
             all_data.append(r)
 
-        # Robust timestamp conversion helper
         def _ensure_ts(val):
             if val is None: return 0.0
             if hasattr(val, "timestamp"): return float(val.timestamp())
@@ -3755,7 +3569,6 @@ async def fixed_list_automations(request, agent):
 
         filtered = []
         for r in all_data:
-            # Filters
             if status_filter and status_filter != str(r.get("status", "")).lower():
                 continue
             if search:
@@ -3763,12 +3576,10 @@ async def fixed_list_automations(request, agent):
                 if search not in text:
                     continue
             
-            # Use helper
             r["timestamp"] = _ensure_ts(r.get("timestamp"))
             r["updated_at"] = _ensure_ts(r.get("updated_at"))
             r["created_at"] = _ensure_ts(r.get("created_at"))
 
-            # Payload
             if r.get("payload") and isinstance(r["payload"], str):
                 try: 
                     import json as py_json
@@ -3777,7 +3588,6 @@ async def fixed_list_automations(request, agent):
 
             filtered.append(r)
 
-        # Final Sort
         try:
             filtered.sort(key=lambda x: float(x.get("timestamp") or 0.0), reverse=(order == "DESC"))
         except Exception as e:
@@ -3795,7 +3605,6 @@ async def fixed_list_automations(request, agent):
 async def create_automation(request, agent):
     data = request.json or {}
 
-    # Zorunlu alanlar
     try:
         event_id = int(data.get("event_id"))
     except Exception:
@@ -4040,7 +3849,6 @@ async def validate_automation_target(request, agent):
                 return sanic_json({"ok": False, "error": "invalid username"}, status=400)
             return sanic_json({"ok": True})
 
-        # henüz uygulanmayanlar
         return sanic_json({"ok": False, "error": f"action not implemented: {action}"}, status=501)
 
     except Exception as e:
@@ -4054,21 +3862,18 @@ async def login(request):
 
     try:
         data_raw = request.json or {}
-        # Validate input with Pydantic
         login_data = LoginRequest(**data_raw)
         username = login_data.username
         password = login_data.password
     except Exception as e:
         return response.json({"status": "error", "message": f"Invalid input: {str(e)}"}, status=400)
 
-    # IP alımı (x-forwarded-for birden çok IP içerebilir)
     xff = request.headers.get("x-forwarded-for")
     if xff:
         ip = xff.split(",")[0].strip()
     else:
         ip = request.conn_info.peername[0] if request.conn_info and request.conn_info.peername else "unknown"
 
-    # --- 1) LOCAL DB DENEMESİ ---
     try:
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
@@ -4082,7 +3887,6 @@ async def login(request):
 
         if row:
             user_id, db_username, db_password, created_at = row
-            # Password check - use bcrypt.verify
             if bcrypt.checkpw(password.encode('utf-8'), db_password.encode('utf-8')):
                 await log_login_attempt(username, "local", "success", "", ip)
 
@@ -4110,7 +3914,6 @@ async def login(request):
     except Exception as e:
         await log_login_attempt(username, "Local", "failure", f"{e} Looking for LDAP", ip)
 
-    # --- 2) LDAP DENEMESİ ---
     try:
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
@@ -4124,34 +3927,29 @@ async def login(request):
         await cnx.close()
 
         if not row:
-            # LDAP konfig yoksa artık yapacak bir şey yok → 401
             await log_login_attempt(username, "ldap", "failure", "No LDAP config", ip)
             return response.json({"status": "error", "message": "Invalid username or password."}, status=401)
 
         ldap_host, ldap_port, bind_dn, encrypted_password, users_base, group_base, login_filter = row
         bind_password = decrypt_password(encrypted_password)
-        tls_config = Tls(validate=ssl.CERT_REQUIRED)  # PROD’da sertifika doğrulamayı açın!
+        tls_config = Tls(validate=ssl.CERT_REQUIRED)
         max_retries = 3
 
         server = Server(ldap_host, port=ldap_port, use_ssl=True, tls=tls_config, connect_timeout=3)
 
         for attempt in range(max_retries):
             try:
-                # admin bind
                 admin_conn = Connection(server, user=bind_dn, password=bind_password, auto_bind=True)
 
-                # kullanıcı ara
-                search_filter = login_filter % username  # örn "(uid=%s)"
+                search_filter = login_filter % username
                 admin_conn.search(users_base, search_filter, attributes=["cn"])
                 if not admin_conn.entries:
                     admin_conn.unbind()
                     await log_login_attempt(username, "ldap", "failure", "User not found", ip)
-                    # kullanıcı yok → artık başka opsiyon kalmadı
                     return response.json({"status": "error", "message": "Invalid username or password."}, status=401)
 
                 user_dn = admin_conn.entries[0].entry_dn
 
-                # kullanıcı grupları
                 admin_conn.search(
                     search_base=group_base,
                     search_filter=f"(member={user_dn})",
@@ -4160,7 +3958,6 @@ async def login(request):
                 group_dns = [entry.entry_dn for entry in admin_conn.entries]
                 admin_conn.unbind()
 
-                # user bind (parola doğrulama)
                 try:
                     user_conn = Connection(server, user=user_dn, password=password, auto_bind=True)
                     user_conn.unbind()
@@ -4168,7 +3965,6 @@ async def login(request):
                     await log_login_attempt(username, "ldap", "failure", "Wrong password", ip)
                     return response.json({"status": "error", "message": "Invalid username or password."}, status=401)
 
-                # rol eşlemesi
                 app_role = "user"
                 try:
                     cnx = await connect_userdb()
@@ -4186,7 +3982,6 @@ async def login(request):
                     await cursor.close()
                     await cnx.close()
                 except Exception:
-                    # mapping başarısızsa default role ile devam
                     pass
 
                 await log_login_attempt(username, "ldap", "success", "", ip)
@@ -4203,7 +3998,6 @@ async def login(request):
                 })
 
             except LDAPSocketOpenError as e:
-                # retry
                 if attempt == max_retries - 1:
                     await log_login_attempt(username, "ldap", "failure", f"Ldap server unreachable: {e}", ip)
                     return response.json({"status": "error", "message": "Invalid username or password."}, status=504)
@@ -4213,15 +4007,12 @@ async def login(request):
         await log_login_attempt(username, "ldap", "failure", f"Exception: {e}", ip)
         return response.json({"status": "error", "message": "Invalid username or password."}, status=401)
 
-    # Buraya geldiysek her iki yöntem de başarısız
     await log_login_attempt(username, "combined", "failure", "All methods failed", ip)
     return response.json({"status": "error", "message": "Invalid username or password."}, status=401)
 
 
 
-# Bloklayıcı LDAP işini senkron bir fonksiyonda yapıyoruz
 def _sync_ldap_bind(ldap_host, ldap_port, bind_dn, bind_password, use_ssl: bool):
-    # PROD: CA sertifikası ver ve validate=ssl.CERT_REQUIRED kullan
     tls_config = Tls(validate=ssl.CERT_REQUIRED)
 
     server = Server(
@@ -4255,7 +4046,6 @@ async def test_ldap_connection(request):
     bind_password = data.get("bind_password")
     use_ssl = bool(data.get("use_ssl", True))
 
-    # hızlı parametre doğrulama
     if not all([ldap_host, ldap_port, bind_dn, bind_password]):
         return response.json({"status": "error", "message": "Missing LDAP parameters"}, status=400)
     try:
@@ -4265,11 +4055,9 @@ async def test_ldap_connection(request):
     except Exception:
         return response.json({"status": "error", "message": "Invalid ldap_port"}, status=400)
 
-    # üst seviye zaman aşımı (DNS + TLS + bind dahil)
-    overall_timeout = float(data.get("timeout", 5))  # dışarıdan override edilebilir
+    overall_timeout = float(data.get("timeout", 5))
 
     try:
-        # Bloklayıcı işi thread pool'a at
         await asyncio.wait_for(
             asyncio.to_thread(_sync_ldap_bind, ldap_host, ldap_port, bind_dn, bind_password, use_ssl),
             timeout=overall_timeout
@@ -4277,7 +4065,6 @@ async def test_ldap_connection(request):
         return response.json({"status": "success", "message": "LDAP connection successful"})
 
     except asyncio.TimeoutError:
-        # Event loop kitlenmedi, sadece bu iş zaman aşımına uğradı
         return response.json(
             {"status": "error", "message": f"LDAP connection timed out (>{overall_timeout}s)"},
             status=504
@@ -4304,9 +4091,8 @@ async def test_ldap_connection(request):
 async def update_role(request, role_id):
     data = request.json or {}
     new_role_name = data.get("role_name")
-    permissions = data.get("permissions", [])  # List of permission names
+    permissions = data.get("permissions", [])
     
-    # Identify the updater from headers
     admin_id = request.headers.get("X-User-ID")
     updated_by = "System"
 
@@ -4314,14 +4100,12 @@ async def update_role(request, role_id):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
 
-        # Fetch admin username for 'updated_by' field
         if admin_id:
             await cursor.execute("SELECT username FROM users WHERE id = %s", (admin_id,))
             admin_row = await cursor.fetchone()
             if admin_row:
                 updated_by = admin_row[0]
 
-        # Check if role exists and get current role name
         await cursor.execute("SELECT role_name FROM roles WHERE id = %s", (role_id,))
         result = await cursor.fetchone()
         if not result:
@@ -4334,7 +4118,6 @@ async def update_role(request, role_id):
 
         current_role_name = result[0]
 
-        # Prevent editing system-defined roles
         if current_role_name in ["admin", "user", "guest"]:
             await cursor.close()
             await cnx.close()
@@ -4343,9 +4126,7 @@ async def update_role(request, role_id):
                 "message": f"System-defined role '{current_role_name}' cannot be edited."
             }, status=403)
 
-        # Update role name if provided
         if new_role_name and new_role_name != current_role_name:
-            # Check if new role name already exists
             await cursor.execute("SELECT id FROM roles WHERE role_name = %s AND id != %s", (new_role_name, role_id))
             if await cursor.fetchone():
                 await cursor.close()
@@ -4355,28 +4136,22 @@ async def update_role(request, role_id):
                     "message": f"Role name '{new_role_name}' already exists."
                 }, status=409)
 
-            # Update role name
             await cursor.execute("""
                 UPDATE roles 
                 SET role_name = %s, updated_by = %s, updated_at = NOW()
                 WHERE id = %s
             """, (new_role_name, updated_by, role_id))
 
-            # Also update users table references if role name changed
             await cursor.execute("""
                 UPDATE users 
                 SET role = %s 
                 WHERE role = %s
             """, (new_role_name, current_role_name))
 
-        # Update permissions if provided
         if permissions is not None:
-            # Remove all existing permissions for this role
             await cursor.execute("DELETE FROM role_permissions WHERE role_id = %s", (role_id,))
 
-            # Add new permissions
-            if permissions:  # Only if permissions list is not empty
-                # Validate that all permissions exist
+            if permissions:
                 placeholders = ','.join(['%s'] * len(permissions))
                 await cursor.execute(f"SELECT name FROM permissions WHERE name IN ({placeholders})", permissions)
                 valid_permissions = [row[0] for row in await cursor.fetchall()]
@@ -4390,7 +4165,6 @@ async def update_role(request, role_id):
                         "message": f"Invalid permissions: {', '.join(invalid_permissions)}"
                     }, status=400)
 
-                # Insert new permissions
                 for perm_name in permissions:
                     await cursor.execute("""
                         INSERT INTO role_permissions (role_id, permission_id)
@@ -4426,7 +4200,6 @@ async def get_role_details(request, role_id):
         cnx = await connect_userdb()
         cursor = await cnx.cursor()
 
-        # Get role information
         await cursor.execute("""
             SELECT id, role_name, created_by, created_at, updated_by, updated_at 
             FROM roles WHERE id = %s
@@ -4443,7 +4216,6 @@ async def get_role_details(request, role_id):
 
         role_id, role_name, created_by, created_at, updated_by, updated_at = role_row
 
-        # Get role permissions
         await cursor.execute("""
             SELECT p.id, p.name, p.description
             FROM role_permissions rp
@@ -4462,7 +4234,6 @@ async def get_role_details(request, role_id):
             for perm_id, perm_name, perm_desc in permission_rows
         ]
 
-        # Get users with this role
         await cursor.execute("""
             SELECT id, username FROM users WHERE role = %s ORDER BY username
         """, (role_name,))
@@ -4511,7 +4282,6 @@ async def get_ldap_config(request):
         
         if row:
             config = dict(zip(columns, row))
-            # Hide password
             config["bind_password"] = "********" if config.get("bind_password") else ""
             return sanic_json({"status": "success", "config": config})
         else:
@@ -4580,7 +4350,6 @@ async def upsert_ldap(request):
         return sanic_json({"status": "error", "message": f"Database error: {str(e)}"}, status=500)
 
 
-# LDAP sunucusundaki grupları çekmek için endpoint
 @app.route("/ldap/groups", methods=["GET"])
 async def get_ldap_groups(request):
     data = request.json or {}
@@ -4601,10 +4370,6 @@ async def get_ldap_groups(request):
         ldap_host, ldap_port, bind_dn, encrypted_password, group_base = row
         bind_password = decrypt_password(encrypted_password)
 
-        # tls_config = Tls(
-        #     ca_certs_file=ca_cert_path,
-        #     validate=ssl.CERT_REQUIRED if ca_cert_path else ssl.CERT_NONE
-        # )
         tls_config = Tls(validate=ssl.CERT_REQUIRED)
 
         server = Server(ldap_host, port=ldap_port, use_ssl=True, tls=tls_config, connect_timeout=3)
@@ -4668,7 +4433,6 @@ async def change_password(request):
 @app.route("/<agent>/restart", methods=["POST"])
 async def trigger_restart(request, agent):
     try:
-        # Directly call the agent and queue to soar
         if is_soar_enabled():
             resp = await call_agent_soar(agent, "restart_service", "zer0vuln-agent", comment="Restart from UI", background_queue=True)
             cnx = await connect_db_for_agent(agent)
@@ -4729,7 +4493,6 @@ async def device_health(request, agent):
         cnx = await connect_db_for_agent(agent)
         cursor = await cnx.cursor()
 
-        # Basit kontrol: agent_info tablosunda veri var mı?
         await cursor.execute("SELECT COUNT(*) FROM agent_info")
         row = await cursor.fetchone()
 
@@ -4777,8 +4540,6 @@ async def get_pending_automations_for_agent(request, agent):
             )
         except Exception as qerr:
             err_str = str(qerr)
-            # 1146 = table doesn't exist → treat as "no pending tasks" so the
-            # poll succeeds and the agent stops alarming.
             if "1146" in err_str or "doesn't exist" in err_str.lower():
                 await cur.close(); await cnx.close()
                 return sanic_json({"status": "success", "tasks": []})
@@ -4804,7 +4565,7 @@ async def report_automation_result_by_id(request, task_id):
     data = request.json or {}
     status = data.get("status", "completed")
     output = data.get("output", "")
-    agent = data.get("agent") # Agent should ideally send its name
+    agent = data.get("agent")
     
     if not agent:
         return sanic_json({"status": "error", "message": "agent name required"}, status=400)
@@ -4850,7 +4611,6 @@ async def list_agents(request):
 
         agents_names = await asyncio.to_thread(get_agent_names)
 
-        # Fetch details for each agent concurrently
         async def get_agent_details(name):
             try:
                 cnx = await connect_db_for_agent(name)
@@ -4866,8 +4626,6 @@ async def list_agents(request):
                     ls = row.get("last_seen")
                     if isinstance(ls, datetime):
                         last_seen_str = ls.strftime("%Y-%m-%d %H:%M:%S")
-                        # 90s activity window. abs() guards against TZ skew where
-                        # a future-stamped row would otherwise stay "Online" forever.
                         delta = abs((datetime.now() - ls).total_seconds())
                         if delta < 90:
                             status = "Online"
@@ -4881,10 +4639,8 @@ async def list_agents(request):
                     }
                 return {"name": name, "status": "Offline", "last_seen": "Never", "public_ip": "-", "os_info": "Unknown"}
             except Exception as e:
-                # Log error silently or return basic info
                 return {"name": name, "status": "Error", "last_seen": "DB Error", "public_ip": "-", "os_info": "Unknown"}
 
-        # Gather all details in parallel
         agent_details = await asyncio.gather(*(get_agent_details(n) for n in agents_names))
         
         return sanic_json({"agents": agent_details})
@@ -4897,7 +4653,6 @@ async def list_agents(request):
 @app.route("/restart-db", methods=["POST"])
 async def restart_db(request):
     try:
-        # Komutu çalıştır: docker compose ile yeniden başlat
         result = subprocess.run(
             ["docker", "compose", "restart", "mysql"],
             capture_output=True,
@@ -5035,7 +4790,7 @@ async def periodic_critical_alerts_check():
 async def periodic_soar_automation_check():
     while True:
         try:
-            await asyncio.sleep(30) # Check every 30 seconds to reduce CPU load
+            await asyncio.sleep(30)
             def _list_agents():
                 with sync_mysql_conn() as c:
                     cur = c.cursor()
@@ -5092,8 +4847,6 @@ async def _run_due_automations_logic(agent):
 
 @app.before_server_start
 async def setup_background_tasks(app, _):
-    # Only run background tasks in the first worker to avoid redundant load
-    # Sanic-Server-0-0 is the standard name for the first worker
     worker_name = os.environ.get("SANIC_WORKER_NAME", "")
     if "0-0" in worker_name or not worker_name:
         print(f"[*] Starting background tasks in worker: {worker_name or 'single'}")
@@ -5102,11 +4855,9 @@ async def setup_background_tasks(app, _):
         app.add_task(periodic_threat_intel_update())
         app.add_task(periodic_vuln_scan())
     else:
-        # Other workers don't need to run these global tasks
         pass
 
 
-# Server-side OSV scan period (seconds). Defaults to 30 min — adjust via env.
 VULN_SCAN_INTERVAL = int(os.getenv("VULN_SCAN_INTERVAL", "1800"))
 
 
@@ -5132,10 +4883,8 @@ async def periodic_vuln_scan():
     once — see modules/vuln_scanner.resolve_osv_endpoint for the selection
     logic. Subsequent cycles reuse the same URL.
     """
-    # Initial delay so the server has time to fetch the Fernet key on boot.
     await asyncio.sleep(60)
     from scanners.vuln import scan_all_agents, resolve_osv_endpoint
-    # Probe runs on a thread because requests.post is blocking.
     await asyncio.to_thread(resolve_osv_endpoint)
     while True:
         try:
@@ -5155,9 +4904,6 @@ async def trigger_agent_vuln_scan(request, agent):
     """Manual trigger for a single-agent OSV scan."""
     try:
         from scanners import vuln as _vs
-        # If the periodic loop hasn't probed yet (e.g. user clicks "Scan Now"
-        # within the first 60s after boot), do it inline. Reading via the
-        # module avoids capturing a stale snapshot of the module-level None.
         if _vs._OSV_BASE is None:
             await asyncio.to_thread(_vs.resolve_osv_endpoint)
         scan_agent = _vs.scan_agent
@@ -5174,19 +4920,14 @@ async def periodic_threat_intel_update():
     """
     while True:
         try:
-            # Refresh every 1 hour (3600s)
             print("[ThreatIntel] Refreshing IoCs...")
             
-            # Mock data for demonstration
             mock_iocs = [
                 {"type": "ip", "value": "185.220.101.5", "source": "TorExitNode", "severity": "MEDIUM", "description": "Known Tor exit node"},
                 {"type": "ip", "value": "45.146.165.37", "source": "BruteForceList", "severity": "HIGH", "description": "SSH Brute force source"},
                 {"type": "hash", "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "source": "MalwareDB", "severity": "CRITICAL", "description": "Empty file hash (test)"}
             ]
             
-            # Logic to save to global DB
-            # Use aiomysql pattern seen in other parts
-            # (Sharing the DB_HOST, DB_USER etc from globals)
             async with aiomysql.create_pool(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD, db="zer0vuln_hub", autocommit=True) as pool:
                 async with pool.acquire() as conn:
                     async with conn.cursor() as cur:
@@ -5226,17 +4967,14 @@ async def get_compliance_report(request):
         async with aiomysql.create_pool(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD, db="zer0vuln_hub", autocommit=True) as pool:
             async with pool.acquire() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cur:
-                    # Count Critical Vulns
                     await cur.execute("SELECT COUNT(*) as count FROM vulnerabilities_report")
                     v_row = await cur.fetchone()
                     vuln_count = v_row["count"] if v_row else 0
                     
-                    # Count FIM changes (last 24h)
                     await cur.execute("SELECT COUNT(*) as count FROM fim_data WHERE status != 'baseline' AND last_seen > NOW() - INTERVAL 1 DAY")
                     f_row = await cur.fetchone()
                     fim_count = f_row["count"] if f_row else 0
                     
-                    # Calculate Score (Start from 100, deduct points)
                     score = 100 - (vuln_count * 2) - (fim_count * 5)
                     score = max(0, score)
                     
@@ -5397,7 +5135,6 @@ async def get_table_data(request, db_name, table_name):
                     cursor.close()
         rows = await asyncio.to_thread(_q)
         
-        # Handle datetime serialization
         json_rows = [
             pyjson.dumps(row, cls=CustomEncoder, ensure_ascii=False)
             for row in rows
@@ -5582,9 +5319,6 @@ async def _get_agent_http_base(agent: str) -> str:
     try:
         cnx = await connect_db_for_agent(agent)
         cur = await cnx.cursor()
-        # Querying the agent-specific DB. Since this DB belongs to 'Agent_X',
-        # any record in agent_info is likely relevant. We relax the name filter
-        # to handle cases where 'agent_name' might be 'DESKTOP...' vs 'Agent_DESKTOP...'
         await cur.execute(
             "SELECT public_ip FROM agent_info "
             "ORDER BY last_seen DESC LIMIT 1"
@@ -5598,15 +5332,11 @@ async def _get_agent_http_base(agent: str) -> str:
             if _is_valid_ipv4(candidate):
                 host = candidate
             else:
-                # If the recorded IP is generic/invalid, we stick to default
                 pass
         else:
-            # Fallback for older setups: try strict name match if no generic record found
-            # (though normally the above should catch it)
             pass
 
     except Exception as e:
-        # Silent fallback to default host (127.0.0.1)
         pass
 
     agent_port = int(os.getenv("AGENT_PORT", "9099"))
@@ -5628,8 +5358,6 @@ async def call_agent_soar(
     background_queue=True (default) ise, ajan direkt push'u kaçırsa bile polling ile alsın diye DB'ye yazar.
     """
     
-    # 1) Her zaman DB'ye (automations) kuyruğa at (eğer istenmişse)
-    # Bu sayede ajan kapalıysa bile açıldığında komutu alır.
     if background_queue:
         try:
             eid = int(event_id) if event_id is not None else 0
@@ -5645,7 +5373,6 @@ async def call_agent_soar(
         except Exception as e:
             print(f"[!] Background skip: Failed to queue '{action}' for {agent}: {e}")
 
-    # 2) Direct push attempt
     base = await _get_agent_http_base(agent)
     keys = await _get_agent_keys(agent)
     url = f"{base}/soar/execute"
@@ -5659,13 +5386,11 @@ async def call_agent_soar(
     if ttl is not None: payload["ttl"] = int(ttl)
 
     def _post():
-        # short timeout — already queued in DB, polling fallback covers misses
         return _try_agent_request("POST", url, keys, payload, 5)
 
     try:
         resp = await asyncio.to_thread(_post)
         
-        # JSON parse
         try:
             data = resp.json() or {}
         except Exception:
@@ -5692,10 +5417,8 @@ async def call_agent_soar(
             }
 
     except Exception as e:
-        # Bağlantı reddedildi vb. durumu (CANCELED/UNREACHABLE)
-        # Hata dönmek yerine, kuyruğa attığımızı bildiriyoruz.
         return {
-            "ok": True, # UI'da hata patlamasın diye True dönüyoruz ama mesajda durumu belirtiyoruz
+            "ok": True,
             "queued": background_queue,
             "message": f"Agent unreachable, command queued for polling. ({e})",
             "warning": str(e)
@@ -5715,16 +5438,11 @@ async def call_agent_soar(
         error = f"Agent SOAR call exception: {e}"
         print(f"[!] {error} (agent={agent}, url={url})")
         return {"ok": False, "error": error, "status": "failed", "message": error}
-# ------------------------------
-# Playbooks REST API (per-agent)
-# ------------------------------
 
 async def ensure_playbooks_table(agent: str):
     """<agent>_db.playbooks tablosu yoksa oluştur."""
     cnx = await connect_db_for_agent(agent)
     cur = await cnx.cursor()
-    # JSON'ı LONGTEXT'te saklıyoruz → sürüm uyumu sorunsuz.
-    # description eklendi
     await cur.execute("""
         CREATE TABLE IF NOT EXISTS playbooks (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -5737,12 +5455,10 @@ async def ensure_playbooks_table(agent: str):
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """)
-    # Migration: add description if missing
     try:
         await cur.execute("ALTER TABLE playbooks ADD COLUMN description TEXT AFTER name")
     except:
         pass
-    # Migration: add updated_at if missing
     try:
         await cur.execute("ALTER TABLE playbooks ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     except:
@@ -5774,7 +5490,6 @@ async def list_playbooks(request, agent):
         cnx = await connect_db_for_agent(agent)
         cur = await cnx.cursor()
         
-        # description olmayabilir, try select yapalım
         try:
             await cur.execute(
                 "SELECT id, name, description, nodes, connections, created_at, updated_at FROM playbooks ORDER BY updated_at DESC"
@@ -5863,7 +5578,6 @@ async def save_playbook(request, agent):
                 return sanic_json({"status": "error", "message": "Playbook not found"}, status=404)
             return sanic_json({"status": "success", "id": int(pid), "mode": "updated"}, status=200)
 
-        # Upsert by name
         await cur.execute("SELECT id FROM playbooks WHERE name=%s LIMIT 1", (name,))
         row = await cur.fetchone()
         if row:
@@ -5945,16 +5659,6 @@ async def update_playbook(request, agent, playbook_id):
         return sanic_json({"status": "error", "message": f"{e}"}, status=500)
 
 
-# -----------------------------------------------------------------------------
-# Playbook deletion
-#
-# The frontend expects to be able to delete a playbook via
-# `DELETE /{agent}/playbooks/{playbook_id}`.  Prior versions of this API
-# lacked such an endpoint, which caused the UI to break when attempting
-# to delete a playbook.  The following handler creates that route and
-# removes the playbook row from the database.  If the record does not
-# exist, a 404 is returned.  Playbook tables are per‑agent, so we use
-# ensure_playbooks_table(agent) before performing the deletion.
 @require_permission("manage_soar")
 @app.delete("/<agent>/playbooks/<playbook_id:int>")
 async def delete_playbook(request, agent, playbook_id):
@@ -5980,24 +5684,17 @@ async def delete_playbook(request, agent, playbook_id):
         return sanic_json({"status": "error", "message": str(e)}, status=500)
 
 
-# NOTE: An explicit DELETE route for playbooks is defined above via
-# @app.delete("/<agent>/playbooks/<playbook_id:int>").  We avoid
-# re-registering the same path here to prevent a `RouteExists` error.
 
 
-# ------------------------------
-# NODE PALETTE (UI tarafı için metadata)
-# ------------------------------
 
 def _palette_actions_enabled():
-    # SOAR lisansı varsa action.* nodeları aktif göster
     return bool(is_soar_enabled())
 
 def _node_schema(type_name, label, category, inputs=None, outputs=None, config_schema=None, disabled=False, help_text=""):
     return {
         "type": type_name,
         "label": label,
-        "category": category,   # "trigger" | "condition" | "action" | "util" | "notify" vs.
+        "category": category,
         "disabled": bool(disabled),
         "inputs": inputs or [{"name": "in", "accept": "*"}],
         "outputs": outputs or [{"name": "out"}],
@@ -6010,8 +5707,6 @@ def _build_node_palette():
 
     nodes = []
 
-    # ---- GENERIC PLACEHOLDERS
-    # Generic trigger placeholder to allow simple 'trigger' type in graphs
     nodes.append(_node_schema(
         "trigger",
         "Trigger (Generic)",
@@ -6026,7 +5721,6 @@ def _build_node_palette():
         },
         help_text="Generic trigger placeholder. Use triggerType to specify the real trigger."
     ))
-    # Generic action placeholder to allow simple 'action' type in graphs
     nodes.append(_node_schema(
         "action",
         "Action (Generic)",
@@ -6042,12 +5736,11 @@ def _build_node_palette():
         help_text="Generic action placeholder. actionType determines the SOAR action or HTTP request."
     ))
 
-    # ---- TRIGGER'lar
     nodes.append(_node_schema(
         "trigger.events_alert",
         "When Events Alert Arrives",
         "trigger",
-        inputs=[],  # trigger'ın girişi yok
+        inputs=[],
         outputs=[{"name": "on_alert"}],
         config_schema={
             "source": {"type": "string", "required": False, "title": "Source contains"},
@@ -6066,7 +5759,6 @@ def _build_node_palette():
         help_text="Zaman bazlı tetik (UI simülasyonu için).",
     ))
 
-    # ---- CONDITION'lar
     nodes.append(_node_schema(
         "condition.severity_at_least",
         "Severity ≥",
@@ -6082,7 +5774,6 @@ def _build_node_palette():
         help_text="context[field] içinde needle arar.",
     ))
 
-    # ---- ACTION'lar (SOAR lisansı yoksa disabled)
     nodes.append(_node_schema(
         "action.soar.block_ip",
         "SOAR: Block IP",
@@ -6100,7 +5791,6 @@ def _build_node_palette():
         help_text="Agent SOAR /soar/execute -> disable_user.",
     ))
 
-    # Additional SOAR actions derived from the SOAR module
     nodes.append(_node_schema(
         "action.soar.unblock_ip",
         "SOAR: Unblock IP",
@@ -6166,7 +5856,6 @@ def _build_node_palette():
         help_text="Agent SOAR /soar/execute -> run_cmd."
     ))
 
-    # ---- NOTIFY
     nodes.append(_node_schema(
         "notify.email",
         "Send Email (template)",
@@ -6178,7 +5867,6 @@ def _build_node_palette():
         help_text="userdb.email_templates içinden şablonla mail atar.",
     ))
 
-    # ---- UTIL
     nodes.append(_node_schema(
         "util.delay",
         "Delay",
@@ -6215,7 +5903,6 @@ async def get_playbook_examples(request):
     ]
     return sanic_json({"examples": examples})
 
-# Webhook trigger endpoint for playbooks
 @app.post("/<agent>/playbooks/<playbook_id:int>/webhook")
 async def playbook_webhook(request, agent, playbook_id):
     """
@@ -6225,9 +5912,7 @@ async def playbook_webhook(request, agent, playbook_id):
     provided event payload.
     """
     try:
-        # Optionally, process incoming event payload
         event = request.json or {}
-        # TODO: Enqueue or execute playbook run based on event
         return sanic_json({"ok": True, "message": "Webhook received", "event": event})
     except Exception as e:
         return sanic_json({"ok": False, "error": str(e)}, status=500)
@@ -6239,7 +5924,6 @@ def _validate_graph_payload(payload: dict):
     conns = payload.get("connections") or []
     known_types = {n["type"] for n in _build_node_palette()["nodes"]}
 
-    # ID ve type kontrolü
     ids = set()
     for i, n in enumerate(nodes):
         nid = n.get("id")
@@ -6253,7 +5937,6 @@ def _validate_graph_payload(payload: dict):
         if not ntype or ntype not in known_types:
             errs.append(f"nodes[{i}].type unknown: {ntype}")
 
-    # connection uçları
     for i, c in enumerate(conns):
         f = c.get("from"); t = c.get("to")
         if f not in ids or t not in ids:
@@ -6262,20 +5945,14 @@ def _validate_graph_payload(payload: dict):
     return errs
 
 
-# ------------------------------
-# PLAYBOOK REAL EXECUTION (backend binding)
-# ------------------------------
 
 def _render_with_ctx(template_str: str, ctx: dict) -> str:
     try:
-        return render_template(template_str, ctx)  # mevcut helper
+        return render_template(template_str, ctx)
     except Exception:
         return template_str
 
 async def _ensure_playbook_runs_table(agent: str):
-    # init.sql ile aynı şemayı kullan: agent_name NOT NULL ve status ENUM
-    # ('running','success','failed','cancelled'). Mevcut DB'de tablo varsa
-    # CREATE no-op; INSERT/UPDATE'lerin bu şemaya uyması gerek.
     cnx = await connect_db_for_agent(agent)
     cur = await cnx.cursor()
     await cur.execute("""
@@ -6323,7 +6000,7 @@ def _eval_condition(ntype: str, config: dict, ctx: dict) -> bool:
         needle = (config or {}).get("needle","")
         val = str(((ctx.get("event") or {}).get(field)) or "")
         return (needle or "") in val
-    return True  # bilinmeyen koşulu true say
+    return True
 
 
 @app.get("/<agent>/playbooks/catalog")
@@ -6359,7 +6036,7 @@ async def get_playbooks_catalog(request, agent):
                 {"key": "bash", "label": "Bash Script"},
                 {"key": "powershell", "label": "PowerShell Script"}
             ],
-            "fields": []  # Dinamik alanlar (örn: event.ip, event.username vb.)
+            "fields": []
         }
         
         return sanic_json(catalog)
@@ -6393,7 +6070,6 @@ async def validate_playbook(request, agent):
         
         issues = []
         
-        # 1. En az 1 trigger olmalı
         triggers = [n for n in nodes if n.get("type") == "trigger"]
         if not triggers:
             issues.append({
@@ -6401,7 +6077,6 @@ async def validate_playbook(request, agent):
                 "message": "Workflow must have at least one trigger node"
             })
         
-        # 2. Orphan node kontrolü (bağlantısız)
         node_ids = {n["id"] for n in nodes}
         connected = set()
         for c in connections:
@@ -6417,7 +6092,6 @@ async def validate_playbook(request, agent):
                     "nodeId": nid
                 })
         
-        # 3. Script node'ları için scriptContent kontrolü
         for node in nodes:
             if node.get("type") == "script":
                 cfg = node.get("data", {}).get("config", {})
@@ -6428,7 +6102,6 @@ async def validate_playbook(request, agent):
                         "nodeId": node["id"]
                     })
         
-        # 4. Action node'ları için zorunlu alanlar
         for node in nodes:
             if node.get("type") == "action":
                 cfg = node.get("data", {}).get("config", {})
@@ -6471,12 +6144,7 @@ async def http_proxy(request):
         if not url:
             return sanic_json({"error": "URL required"}, status=400)
         
-        # ⚠️ PRODUCTION: URL whitelist ekle
-        # allowed_domains = ["internal-service.local", "api.company.com"]
-        # if not any(d in url for d in allowed_domains):
-        #     return sanic_json({"error": "Domain not allowed"}, status=403)
         
-        # Bloklayıcı HTTP call'u thread'e at
         def _make_request():
             import requests
             return requests.request(
@@ -6515,7 +6183,6 @@ async def playbook_execute_real(request, agent):
         return sanic_json({"ok": False, "errors": errs}, status=400)
 
     await _ensure_playbook_runs_table(agent)
-    # run kaydı aç
     cnx = await connect_db_for_agent(agent)
     cur = await cnx.cursor()
     pb_name = (payload.get("name") or "unnamed")[:255]
@@ -6527,7 +6194,6 @@ async def playbook_execute_real(request, agent):
     await cnx.commit()
     await cur.close(); await cnx.close()
 
-    # Context başlangıcı
     ctx = {
         "agent": agent,
         "event": payload.get("sample_event") or {"ip":"10.10.10.10","username":"alice","severity":"HIGH","message":"sample"},
@@ -6540,22 +6206,18 @@ async def playbook_execute_real(request, agent):
             conf  = n.get("config") or {}
             step  = {"node": n["id"], "type": ntype, "ok": True}
 
-            # TRIGGER
             if ntype.startswith("trigger."):
                 step["info"] = "triggered"
                 timeline.append(step); continue
 
-            # CONDITION
             if ntype.startswith("condition."):
                 res = _eval_condition(ntype, conf, ctx)
                 step["result"] = bool(res)
                 timeline.append(step)
                 if not res:
-                    # şimdilik geç; bağlantı takibi basit tutulduğundan sadece logla
                     pass
                 continue
 
-            # UTIL
             if ntype == "util.delay":
                 ms = int(conf.get("ms", 1000))
                 ms = max(0, min(ms, 5000))
@@ -6563,7 +6225,6 @@ async def playbook_execute_real(request, agent):
                 step["result"] = f"waited {ms}ms"
                 timeline.append(step); continue
 
-            # NOTIFY
             if ntype == "notify.email":
                 tname = conf.get("template_name") or f"Critical Alerts - Agent: {agent}"
                 ctx_str = conf.get("context_json") or "{}"
@@ -6576,8 +6237,6 @@ async def playbook_execute_real(request, agent):
                 step["ok"] = bool(ok)
                 timeline.append(step); continue
 
-            # ACTIONS (SOAR)
-            # Known specific handlers
             if ntype == "action.soar.block_ip":
                 ip = _render_with_ctx(str(conf.get("ip") or "{{event.ip}}"), ctx)
                 r = await call_agent_soar(agent, action="block_ip", target=ip, comment=f"playbook#{run_id}:{pb_name}")
@@ -6592,10 +6251,8 @@ async def playbook_execute_real(request, agent):
                 step["ok"] = bool(r.get("ok"))
                 timeline.append(step); continue
 
-            # Generic SOAR action handler: any action.soar.<name> will be forwarded to the agent.
             if ntype.startswith("action.soar."):
                 action_name = ntype.split(".")[-1]
-                # Determine target from config: try several possible keys
                 tgt_raw = (
                     conf.get("target") or
                     conf.get("username") or
@@ -6614,7 +6271,6 @@ async def playbook_execute_real(request, agent):
                 step["ok"] = bool(r.get("ok"))
                 timeline.append(step); continue
 
-            # Bilinmeyen node
             step["ok"] = False
             step["error"] = f"unknown node type: {ntype}"
             timeline.append(step)
@@ -6627,7 +6283,6 @@ async def playbook_execute_real(request, agent):
 
     except Exception as e:
         timeline.append({"node": None, "type": "runtime", "ok": False, "error": str(e)})
-        # Hata dahil edilmiş timeline ile finalize et
         await _append_run_log(agent, run_id, timeline, status="failed")
         return sanic_json({"ok": False, "run_id": run_id, "error": str(e), "timeline": timeline}, status=500)
     
@@ -6716,7 +6371,6 @@ async def download_playbook_run(request, agent, run_id):
     cols = ["id", "playbook_name", "status", "started_at", "finished_at", "timeline"]
     d = dict(zip(cols, row))
 
-    # timeline normalize
     tl = d.get("timeline")
     if isinstance(tl, (bytes, bytearray)):
         tl = tl.decode("utf-8", "ignore")
@@ -6747,7 +6401,6 @@ async def run_playbook(request, agent, playbook_id):
     timeline: list = []
 
     try:
-        # 1) Playbook’u yükle
         await ensure_playbooks_table(agent)
         cnx = await connect_db_for_agent(agent)
         cur = await cnx.cursor()
@@ -6763,7 +6416,6 @@ async def run_playbook(request, agent, playbook_id):
         conns = raw_conns if isinstance(raw_conns, list) else []
         pb_name = (row[2] or "unnamed")[:255]
 
-        # 2) Basit yönlendirme: from->to map
         nexts: dict = {}
         for c in conns:
             if not isinstance(c, dict):
@@ -6772,7 +6424,6 @@ async def run_playbook(request, agent, playbook_id):
             if f and t:
                 nexts.setdefault(f, []).append(t)
 
-        # 3) Run kaydı aç (her zaman başarısız bile olsa Recent Executions'a düşsün)
         await _ensure_playbook_runs_table(agent)
         cnx = await connect_db_for_agent(agent)
         cur = await cnx.cursor()
@@ -6784,7 +6435,6 @@ async def run_playbook(request, agent, playbook_id):
         await cnx.commit()
         await cur.close(); await cnx.close()
 
-        # 4) Çok basit yürütücü (loop koruması ile)
         nid_map = {n["id"]: n for n in nodes if isinstance(n, dict) and "id" in n}
         visited = set()
         heads = set(nid_map.keys())
@@ -6833,7 +6483,6 @@ async def run_playbook(request, agent, playbook_id):
             try:
                 await do_action(nid_map[cur_id])
             except Exception as node_err:
-                # Bir node patlarsa pipeline'ı durdurma — timeline'a kaydet, devam et.
                 timeline.append({
                     "node": cur_id,
                     "type": nid_map[cur_id].get("type", ""),
@@ -6844,13 +6493,10 @@ async def run_playbook(request, agent, playbook_id):
                 if nxt not in visited:
                     queue.append(nxt)
 
-        # Finalize the run record. Status'u node sonuçlarına göre belirle:
-        # bir node bile başarısızsa (direct push fail + queued dahil) overall=failed.
         def _step_ok(step):
             r = step.get("result")
             if isinstance(r, dict):
                 return bool(r.get("ok"))
-            # "ok" string veya başka bir şey ise success say
             return r == "ok" or r is True
 
         overall_status = "success" if (timeline and all(_step_ok(s) for s in timeline)) else "failed"
@@ -6876,8 +6522,6 @@ async def run_playbook(request, agent, playbook_id):
         return sanic_json({"ok": True, "run_id": run_id, "status": overall_status, "timeline": timeline})
 
     except Exception as e:
-        # Sanic'in jenerik 500'üne düşmesin: gerçek hatayı loglayıp döndür ki
-        # frontend hata mesajını gösterebilsin ve run satırı 'failed' olarak işaretlensin.
         err_msg = str(e)
         print(f"[!] run_playbook failed agent={agent} pb={playbook_id}: {err_msg}", flush=True)
         print(_tb.format_exc(), flush=True)
@@ -6907,7 +6551,6 @@ async def create_playbook_compat(request, agent_name):
     if not name:
         return sanic_json({"status": "error", "message": "name is required"}, status=400)
 
-    # Agent'a özel playbooks tablosu (aynı /<agent>/playbooks ile)
     await ensure_playbooks_table(agent_name)
 
     nodes_json = pyjson.dumps(nodes, ensure_ascii=False)
@@ -6917,7 +6560,6 @@ async def create_playbook_compat(request, agent_name):
         cnx = await connect_db_for_agent(agent_name)
         cur = await cnx.cursor()
 
-        # Aynı isimde playbook varsa hata ver (agent bazlı)
         await cur.execute("SELECT id FROM playbooks WHERE name=%s LIMIT 1", (name,))
         row = await cur.fetchone()
         if row:
@@ -6988,7 +6630,6 @@ async def get_playbook_run(request, agent, run_id):
     cols = ["id", "playbook_name", "status", "started_at", "finished_at", "timeline"]
     d = dict(zip(cols, row))
 
-    # timeline string ise JSON'a çevir
     tl = d.get("timeline")
     if isinstance(tl, (bytes, bytearray)):
         tl = tl.decode("utf-8", "ignore")
@@ -7018,7 +6659,6 @@ async def soar_execute(request, agent):
     if action not in AUTOMATION_ALLOWED_ACTIONS:
         return sanic_json({"ok": False, "error": f"action not allowed: {action}"}, status=400)
 
-    # Basit target validasyonunu kullan
     if action == ActionType.BLOCK_IP.value and not _is_valid_ipv4(target):
         return sanic_json({"ok": False, "error": "invalid IPv4"}, status=400)
     if action == ActionType.DISABLE_USER.value and not _is_valid_username(target):
@@ -7064,7 +6704,6 @@ async def drop_database(request, db_name):
                     cursor.close()
         await asyncio.to_thread(_drop)
 
-        # Audit the database deletion
         await audit_log(request, "DROP_DATABASE", db_name, f"Databases dropped: {', '.join(candidates)}")
 
         return sanic_json(
@@ -7102,20 +6741,12 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
     
-    # --- Screen WebSocket Proxy ---
-    # Browser ↔ server WebSocket → server ↔ agent /screen/ws WebSocket pipe.
-    # Replaces the older TCP-VNC proxy: the agent now streams JPEG frames
-    # over its own websocket, so we don't need TightVNC + raw 5900 anymore.
     @app.websocket("/vnc-proxy/<agent>")
     async def vnc_proxy(request, ws, agent):
         import websockets
         base = await _get_agent_http_base(agent)
         keys = await _get_agent_keys(agent)
-        # Pass auth via query string because browsers can't set custom headers
-        # on a WebSocket upgrade. The agent accepts ?key= alongside its
-        # X-License-Key header.
         agent_key = (keys[0] if keys else "")
-        # Forward common tuning params from browser query → agent.
         fps = request.args.get("fps", "10")
         q = request.args.get("q", "60")
         w = request.args.get("w", "1280")
@@ -7150,7 +6781,6 @@ if __name__ == "__main__":
                 pass
             await ws.close()
 
-# --- Serving Frontend Static Files ---
 @app.route("/", name="frontend_root")
 async def serve_root(request):
     return await response.file("./frontend/dist/index.html")
@@ -7163,7 +6793,6 @@ async def search_logs_api(request):
     query_str = request.args.get("q", "*")
     limit = int(request.args.get("limit", 100))
     
-    # Simple match query or wildcard
     if query_str == "*":
         query_body = {
             "size": limit,
@@ -7201,11 +6830,9 @@ async def search_logs_api(request):
 
 @app.route("/<path:path>", name="frontend_spa")
 async def serve_index(request, path=""):
-    # Prevent API and Health routes from falling into SPA catch-all
     if path.startswith(("api/", "health", "assets/", "vite.svg")):
          return sanic_json({"error": "Not Found", "path": path}, status=404)
          
-    # Only serve index.html for routing paths
     return await response.file("./frontend/dist/index.html")
 
 @app.route("/health")
@@ -7217,7 +6844,6 @@ if __name__ == "__main__":
     app.config.TOUCHUP = False
     app.config.ACCESS_LOG = True
     
-    # Use all available CPU cores as requested
     num_workers = multiprocessing.cpu_count() if os.name != 'nt' else 1
     
     app.run(

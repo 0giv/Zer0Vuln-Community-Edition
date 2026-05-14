@@ -1,4 +1,3 @@
-# main.py
 import socket
 import struct
 import time
@@ -25,25 +24,16 @@ from sanic.response import json as sanic_json, text as sanic_text
 from modules.db import insert_record, fetch_unsent, mark_sent, fetch_one
 import modules.enc_db as enc_db
 
-# ────────────────────────────────────────────────────────────────────────────────
-# TARGETED LOGGING SYSTEM (Modules -> File, Startup -> Terminal)
-# ────────────────────────────────────────────────────────────────────────────────
 import logging
 import builtins
 import traceback
 
-# When frozen by PyInstaller (--onefile), __file__ points at the temporary
-# _MEIxxxx extract dir which disappears when the process exits — logs written
-# there vanish. Use the dir containing the executable instead, so the log lives
-# alongside main.exe / main in the install directory.
 if getattr(sys, "frozen", False):
     AGENT_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
     AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_LOG_PATH = os.path.join(AGENT_DIR, "agent.log")
 
-# Setup logger (+ mirror to stderr so the task's console / LastTaskResult=1
-# diagnostics are useful when the agent crashes on startup)
 for h in logging.root.handlers[:]: logging.root.removeHandler(h)
 _log_fmt = logging.Formatter('%(asctime)s [%(levelname)s] [%(name)s] %(message)s')
 try:
@@ -51,8 +41,6 @@ try:
     fh.setFormatter(_log_fmt)
     logging.root.addHandler(fh)
 except Exception as _log_err:
-    # Filesystem write failed (permissions, missing dir). Don't kill startup —
-    # stderr handler below still captures everything.
     sys.stderr.write(f"[agent] could not open log file {AGENT_LOG_PATH}: {_log_err}\n")
 sh = logging.StreamHandler(sys.stderr)
 sh.setFormatter(_log_fmt)
@@ -63,15 +51,14 @@ logging.root.propagate = False
 original_print = builtins.print
 
 def trapped_print(*args, **kwargs):
-    # Detect if caller is in modules/
     stack = traceback.extract_stack()
     is_module = False
-    for frame in reversed(stack[:-1]): # Start from caller
+    for frame in reversed(stack[:-1]):
         fname = frame.filename.replace("\\", "/")
         if "/modules/" in fname or "log_extractor" in fname or "fim" in fname:
             is_module = True
             break
-        if "main.py" in fname: # We hit main.py, stop looking
+        if "main.py" in fname:
             break
             
     if is_module:
@@ -81,11 +68,7 @@ def trapped_print(*args, **kwargs):
         original_print(*args, **kwargs)
 
 builtins.print = trapped_print
-# ────────────────────────────────────────────────────────────────────────────────
 
-# ────────────────────────────────────────────────────────────────────────────────
-# İç modüller
-# ────────────────────────────────────────────────────────────────────────────────
 from modules.log_extractor.log_extractor import main as log_extractor_main
 from modules.check_permissions.check_permissions import main as check_permissions_main
 from modules.resource_checker.resource_checker import main as resource_checker_main
@@ -100,7 +83,6 @@ from modules.inventory import main as inventory_main
 from modules.lateral_movement import LateralMovementDetector
 from modules.persistence_hunter import PersistenceHunter
 
-# SOAR bileşenlerini doğrudan kullanacağız (aynı yürütme altyapısı)
 from modules.soar.soar import (
     SOARAutomation,
     SOARConfig,
@@ -152,9 +134,6 @@ def automations_cycle(agent_name: str, api_base: str, license_key: str | None = 
     return stats
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Lisans/Memnuniyet Katmanı
-# ────────────────────────────────────────────────────────────────────────────────
 
 class LicenseError(Exception):
     pass
@@ -182,8 +161,6 @@ class ServerBootstrapClient:
         }
 
     def status(self, reveal_key: bool = False) -> dict:
-        # `reveal_key` is accepted for legacy callers but the bootstrap endpoint
-        # always returns the key when the agent_key is authentic.
         del reveal_key
         url = f"{self.base_url}/api/agents/bootstrap"
         r = requests.get(url, headers={"X-Agent-Key": self.agent_key}, timeout=self.timeout)
@@ -230,8 +207,6 @@ class ServerBootstrapClient:
             sys.exit(1)
 
 
-# Legacy alias — old call sites in this file referenced LicenseClient as a
-# type. Keep it pointed at the bootstrap client so type hints don't 500.
 LicenseClient = ServerBootstrapClient
 
 
@@ -302,26 +277,18 @@ class FernetKeyRefresher(threading.Thread):
                 self._stop.wait(self.refresh_sec)
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Sanic Uygulaması
-# ────────────────────────────────────────────────────────────────────────────────
 
 app = Sanic("Zer0Vuln_Agent")
 CORS(app)
 
-# Global ayarlar/argümanlar runtime'da doldurulacak
 AGENT_NAME = None
 SERVER_IP = None
-SERVER_PORT = 5001  # TCP Ingest
+SERVER_PORT = 5001
 AUTOMATIONS_API_URL = None
-AUTOMATIONS_MODE = "auto"   # auto|server|db
+AUTOMATIONS_MODE = "auto"
 LICENSE_KEY = None
-OS_INFO = platform.platform() # Better than platform.system() + platform.release()
+OS_INFO = platform.platform()
 
-# Real machine identifiers, separate from the user-chosen agent_name. They are
-# embedded into the OS_INFO field at send time (pipe-separated key=value tail)
-# so the existing TCP wire protocol stays untouched. The server.py side splits
-# them back out and stores them on the agent_info row.
 _HOSTNAME = ""
 _MAC_ADDRESS = ""
 try:
@@ -362,23 +329,17 @@ TABLES = [
 
 MAX_WORKERS = 6
 
-# SOAR/Automations için paylaşılan yürütme alt yapısı
 _soar_logger = SOARLogger("soar_actions.log")
 _executor = SystemCommandExecutor(_soar_logger, timeout=30, retry_attempts=3, retry_delay=2)
 _firewall = FirewallManager(_soar_logger, _executor)
 _user_mgr = UserAccountManager(_soar_logger, _executor)
 
-# SOAR yerel event işlemci objesi (config override edilebilir)
 _soar = SOARAutomation(SOARConfig())
 
-# Lisans thread referansı
 _license_client: LicenseClient | None = None
 _key_refresher: FernetKeyRefresher | None = None
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Yardımcılar
-# ────────────────────────────────────────────────────────────────────────────────
 
 def get_public_ip() -> str:
     """
@@ -389,22 +350,18 @@ def get_public_ip() -> str:
     """
     ip = None
 
-    # 1) SERVER_IP varsa ona göre route al
     target_ip = SERVER_IP or "8.8.8.8"
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            # Burada gerçek paket gitmiyor, sadece kernel route seçiyor
             s.connect((target_ip, 80))
             ip = s.getsockname()[0]
     except Exception:
         ip = None
 
-    # Bir IP aldıysak ve loopback veya apipa değilse bunu kullan
     if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
         return ip
 
-    # 2) Host üzerindeki diğer IPv4 adreslerine bak (ek güvenlik)
     try:
         candidates = []
         import psutil
@@ -415,20 +372,16 @@ def get_public_ip() -> str:
                         candidates.append(addr.address)
 
         if candidates:
-            # varsa public olanı tercih et
             public_candidates = [a for a in candidates if not _is_private_ip(a) and not a.startswith("169.254.")]
             if public_candidates:
                 return public_candidates[0]
-            # yoksa real private LAN IP'yi döner
             lan_candidates = [a for a in candidates if not a.startswith("169.254.")]
             if lan_candidates:
                 return lan_candidates[0]
-            # Mecbursak apipa
             return candidates[0]
     except Exception:
         pass
 
-    # 3) socket.gethostname() fallback
     try:
         host_ip = socket.gethostbyname(socket.gethostname())
         if host_ip and not host_ip.startswith("127.") and not host_ip.startswith("169.254."):
@@ -453,7 +406,6 @@ def send_alert(source, severity, message, metadata=None):
         if metadata:
             rec["message"] += f" | {json.dumps(metadata)}"
             
-        # Use enc_db for encrypted recording if available
         if hasattr(enc_db, "insert_record_enc"):
             enc_db.insert_record_enc("events_alert", rec)
         else:
@@ -475,27 +427,22 @@ def send_table(table: str):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.connect((SERVER_IP, SERVER_PORT))
 
-            # 1. Agent name
             agent_bytes = AGENT_NAME.encode('utf-8')
             s.sendall(struct.pack('!I', len(agent_bytes)))
             s.sendall(agent_bytes)
 
-            # 2. Public IP
             ip_bytes = public_ip.encode('utf-8')
             s.sendall(struct.pack('!I', len(ip_bytes)))
             s.sendall(ip_bytes)
 
-            # 3. OS info
             os_bytes = OS_INFO.encode('utf-8')
             s.sendall(struct.pack('!I', len(os_bytes)))
             s.sendall(os_bytes)
 
-            # 4. Filename
             fname_bytes = fname.encode()
             s.sendall(struct.pack('!I', len(fname_bytes)))
             s.sendall(fname_bytes)
 
-            # 5. Data
             s.sendall(struct.pack('!Q', fsize))
             s.sendall(data_bytes)
 
@@ -547,9 +494,6 @@ def kill_old_agent_if_exists():
             print(f"[!] Could not kill old agent: {e}", flush=True)
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Automations API İstemcisi (resilient endpoint keşfi)
-# ────────────────────────────────────────────────────────────────────────────────
 
 class AutomationsClient:
     def __init__(self, base_url: str, timeout: int = 8):
@@ -576,7 +520,6 @@ class AutomationsClient:
             return {"ok": True}
 
     def fetch_pending_tasks(self, agent_name: str):
-        # Deneme sırası
         candidates = [
             (f"/{agent_name}/automations/pending", None),
             (f"/agents/{agent_name}/automations/pending", None),
@@ -602,7 +545,7 @@ class AutomationsClient:
         payload = {
             "task_id": task_id,
             "status": status,
-            "output": output[-2000:],  # şişmesin
+            "output": output[-2000:],
             "metadata": metadata or {},
         }
         candidates = [
@@ -656,7 +599,6 @@ def _exec_local_action(task: dict) -> (bool, str):
         return ok, msg
 
     if ttype == "run_cmd":
-        # Güvenlik: komutu liste şeklinde ve shell=False çalıştır.
         cmd = params.get("cmd")
         if not cmd or not isinstance(cmd, list):
             return False, "cmd must be a list (no shell)"
@@ -674,15 +616,8 @@ def _exec_local_action(task: dict) -> (bool, str):
             return False, str(e)
 
     if ttype == "restart_service" or ttype == "restart_agent":
-        # Agent'ı restart et (lifecycle)
         print("[*] SOAR: Triggering agent restart...")
-        # Ayrı threadde yap ki HTTP cevabı dönebilsin (gerçi polling yapıyoruz ama iz kalsın)
         threading.Thread(target=lambda: os.system("python main.py"), daemon=True).start() 
-        # Not: main.py'deki restart_agent fonksiyonunu çağırmak daha sağlıklı
-        # Ama polling loop içinde olduğumuz için direk sys.exit/restart mekanizması lazım.
-        # En temizi mevcut restart_agent logicini tetiklemek.
-        # Ancak restart_agent endpointi request bekliyor.
-        # O yüzden perform_restart() benzeri bir helper lazım.
         return True, "Restart initiated"
 
     if ttype == "self_destruct":
@@ -732,9 +667,6 @@ def soar_events_loop(interval_sec: int = 30):
         time.sleep(interval_sec)
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# HTTP Endpoints
-# ────────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health(_):
@@ -798,15 +730,10 @@ def perform_destruction():
     print(f"[*] Initiating self-destruction sequence on {system}...")
     
     try:
-        # 1. Stop background threads if possible (best effort)
-        # 2. Platform specific cleanup
         if system == "windows":
-            # Best effort to delete the executable/script directory on next reboot or immediately
-            # Note: Deleting a running script is tricky on Windows
             cmd = "powershell -Command \"Start-Sleep -s 5; Remove-Item -Recurse -Force (Get-Item -Path .).FullName\""
             subprocess.Popen(cmd, shell=True)
         else:
-            # Linux: self-delete script
             cmd = "sleep 5 && rm -rf \"$(pwd)\""
             subprocess.Popen(cmd, shell=True)
             
@@ -820,9 +747,6 @@ def perform_destruction():
         os._exit(1)
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# Bootstrap / Main
-# ────────────────────────────────────────────────────────────────────────────────
 
 def _init_license_via_server(server_url: str, agent_key: str):
     global _license_client, _key_refresher
@@ -849,7 +773,7 @@ def start_lateral_movement_check():
                 )
         except Exception as e:
             print(f"[Main] Lateral movement check error: {e}")
-        time.sleep(300) # Check every 5 minutes
+        time.sleep(300)
 
 def start_persistence_hunt():
     hunter = PersistenceHunter()
@@ -865,16 +789,13 @@ def start_persistence_hunt():
                 )
         except Exception as e:
             print(f"[Main] Persistence hunt error: {e}")
-        time.sleep(1200) # Check every 20 minutes
+        time.sleep(1200)
 
 def start_threads():
-    # ... existing threads ...
     threading.Thread(target=start_lateral_movement_check, daemon=True).start()
     threading.Thread(target=start_persistence_hunt, daemon=True).start()
-    # Start Docker Monitor (runs continuously, not periodically)
     start_docker_monitor_thread()
 
-    # İş parçacıkları
     threading.Thread(
         target=periodic_wrapped,
         args=(log_extractor_main, 600, "log_extractor"),
@@ -905,15 +826,6 @@ def start_threads():
         daemon=True
     ).start()
 
-    # NOTE: vulnerability scanning was moved server-side (modules/vuln_scanner.py)
-    # to keep the endpoint quiet. The agent only collects packages; the server
-    # queries OSV and writes findings to the agent's vulnerabilities_report table.
-    # Re-enable this thread only if you need offline-only vuln scans.
-    # threading.Thread(
-    #     target=periodic_wrapped,
-    #     args=(find_vuln.main, 300, "find_vuln"),
-    #     daemon=True
-    # ).start()
 
     threading.Thread(
         target=periodic_wrapped,
@@ -945,14 +857,12 @@ def start_threads():
         daemon=True
     ).start()
 
-    # Yerel SOAR event döngüsü
     threading.Thread(
         target=soar_events_loop,
         args=(30,),
         daemon=True
     ).start()
 
-    # Automations kuyruğu çekici
     api = AutomationsClient(AUTOMATIONS_API_URL, timeout=10)
     threading.Thread(
         target=automations_loop,
@@ -962,7 +872,6 @@ def start_threads():
 
     start_automations_worker()
 
-    # DB gönderim döngüsü
     threading.Thread(
         target=db_sender_loop,
         daemon=True
@@ -997,7 +906,6 @@ def start_automations_worker():
             daemon=True
         ).start()
     else:
-        # auto: URL varsa server, yoksa DB
         if AUTOMATIONS_API_URL:
             threading.Thread(
                 target=server_automations_loop,
@@ -1046,9 +954,6 @@ def _parse_args():
 
 def _load_identity_from_config(path: str) -> dict:
     """Load agent identity (agent_name, agent_key, server_url) from JSON config."""
-    # utf-8-sig transparently strips a leading BOM if present. PowerShell 5.1
-    # writes UTF-8 with BOM by default for Set-Content/Out-File, so older
-    # installer versions produce config.json files that plain utf-8 rejects.
     with open(path, "r", encoding="utf-8-sig") as f:
         cfg = json.load(f)
     required = ("agent_name", "agent_key", "server_url")
@@ -1091,8 +996,6 @@ def _accepted_license_keys() -> set:
     keys = set()
     if LICENSE_KEY:
         keys.add(LICENSE_KEY)
-    # Look for the server's master under either name. AGENT_MASTER_LICENSE is
-    # the explicit name; LICENSE_KEY is the legacy fallback.
     for env_var in ("AGENT_MASTER_LICENSE", "LICENSE_KEY"):
         v = os.getenv(env_var, "").strip()
         if v:
@@ -1152,7 +1055,6 @@ async def soar_execute(request: Request):
     if action not in allowed_actions:
         return sanic_json({"ok": False, "error": f"action not implemented: {action}"}, status=501)
 
-    # target: string aksiyonlarda string, run_cmd'de liste
     target_raw = data.get("target")
     target_str = str(target_raw).strip() if target_raw is not None else ""
 
@@ -1164,19 +1066,14 @@ async def soar_execute(request: Request):
     except Exception:
         event_id = None
 
-    # TTL: boş ise None bırakıyoruz; SOARConfig default’u kullanılır
     ttl = data.get("ttl", None)
     try:
         ttl = int(ttl) if ttl not in (None, "") else None
     except Exception:
         ttl = None
 
-    # force paramı: aktif aksiyonu yeniden denemek için
     force = bool(data.get("force", False))
 
-    # ------------------------------------------------------------------
-    # Basit input validasyonları (400 dönmek için)
-    # ------------------------------------------------------------------
     if action in (ActionType.BLOCK_IP.value, ActionType.UNBLOCK_IP.value):
         if not FirewallManager._is_valid_ip(target_str):
             return sanic_json({"ok": False, "error": "invalid IPv4"}, status=400)
@@ -1188,7 +1085,6 @@ async def soar_execute(request: Request):
         target_for_exec = target_str
 
     elif action == ActionType.RUN_CMD.value:
-        # run_cmd için target mutlaka liste olmalı
         if not isinstance(target_raw, list) or not target_raw:
             return sanic_json(
                 {"ok": False, "error": "run_cmd target must be a non-empty list"},
@@ -1197,7 +1093,6 @@ async def soar_execute(request: Request):
         target_for_exec = target_raw
 
     elif action == ActionType.KILL_PROCESS.value:
-        # PID veya process adı – sadece boş olmasın
         if not target_str:
             return sanic_json({"ok": False, "error": "process target is required"}, status=400)
         target_for_exec = target_str
@@ -1208,7 +1103,6 @@ async def soar_execute(request: Request):
         target_for_exec = target_str
 
     elif action == ActionType.LOCK_MACHINE.value:
-        # target önemsemiyoruz, boş string geçilir
         target_for_exec = target_str or ""
 
     elif action == ActionType.QUARANTINE_FILE.value:
@@ -1222,12 +1116,8 @@ async def soar_execute(request: Request):
         target_for_exec = target_str
 
     else:
-        # teori olarak buraya düşmemesi lazım; allowed_actions filtresi var
         return sanic_json({"ok": False, "error": f"action not implemented: {action}"}, status=501)
 
-    # ------------------------------------------------------------------
-    # Asıl aksiyon yürütme SOARAutomation üzerinden
-    # ------------------------------------------------------------------
     ok, msg, expires_at = _soar.exec_action(
         action=action,
         target=target_for_exec,
@@ -1239,10 +1129,8 @@ async def soar_execute(request: Request):
 
     status = "success" if ok else "failed"
 
-    # DB'de oluşan soar_actions kaydının ID'sini bulmaya çalış
     soar_action_id = None
     try:
-        # UNBLOCK / ENABLE aslında tabloda block/disable satırlarını temsil ediyor
         if action == ActionType.UNBLOCK_IP.value:
             db_action = ActionType.BLOCK_IP.value
         elif action == ActionType.ENABLE_USER.value:
@@ -1250,7 +1138,6 @@ async def soar_execute(request: Request):
         else:
             db_action = action
 
-        # event_id None gelmiş olabilir, SOAR içinde 0'a cast ediliyor
         eid = int(event_id or 0)
 
         row = fetch_one(
@@ -1261,10 +1148,8 @@ async def soar_execute(request: Request):
         if row:
             soar_action_id = row.get("id")
     except Exception:
-        # ID bulunamasa da API çalışmaya devam etsin
         soar_action_id = None
 
-    # Hata kodlarını ayrıştır: input kaynaklı ise 400, aksi halde 500/501
     if not ok:
         lower_msg = (msg or "").lower()
         if any(x in lower_msg for x in ["invalid ip address", "invalid username", "must be a list"]):
@@ -1301,7 +1186,6 @@ async def get_config(request, cfg_type):
         return sanic_json({"ok": False, "error": "invalid type"}, status=400)
     
     try:
-        # Get directory of current file
         base_dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(base_dir, mapping[cfg_type])
         with open(path, "r", encoding="utf-8") as f:
@@ -1338,19 +1222,6 @@ async def set_config(request, cfg_type):
         return sanic_json({"ok": False, "error": str(e)}, status=500)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Screen streaming over WebSocket
-#
-# Replaces the old TightVNC dependency with a self-contained JPEG frame stream.
-# The agent grabs the primary monitor with `mss`, JPEG-encodes via Pillow, and
-# writes binary frames to the websocket on a fixed cadence. The server proxies
-# the websocket through to the browser as a single hop, so the browser only
-# talks to the server.
-#
-# Auth via the same _check_license_header() helper, but read from a `?key=`
-# query param too because browsers can't set arbitrary headers on a WebSocket
-# upgrade. The header path stays for direct testing with curl/wscat.
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _ws_authorized(request) -> bool:
     """WebSocket-friendly auth: header X-License-Key OR query string ?key=."""
@@ -1390,9 +1261,6 @@ async def screen_stream(request, ws):
         await ws.close(code=1011, reason="missing dep")
         return
 
-    # Tunable via query string so an operator can dial throughput vs CPU on
-    # the fly without restarting the agent. Keep the defaults conservative —
-    # 12 fps at quality 60 is ~150 KB/frame on a 1080p screen.
     try:
         fps = max(1, min(int(request.args.get("fps", 10)), 30))
     except Exception:
@@ -1437,7 +1305,6 @@ async def screen_stream(request, ws):
 def main():
     global AGENT_NAME, SERVER_IP, SERVER_PORT, LICENSE_KEY, AUTOMATIONS_API_URL, AUTOMATIONS_MODE
 
-    # Sinyal
     if hasattr(signal, 'SIGTERM'):
         try:
             signal.signal(signal.SIGTERM, handle_sigterm)
@@ -1448,7 +1315,6 @@ def main():
 
     args = _parse_args()
 
-    # Identity: config-file first, CLI fallback
     cfg_path = args.config or os.getenv("ZER0VULN_CONFIG")
     if not cfg_path:
         default_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -1467,9 +1333,6 @@ def main():
     AGENT_NAME = args.agent or cfg.get("agent_name")
     SERVER_IP = args.server or cfg.get("server_ip") or (cfg.get("server_url", "").replace("http://", "").replace("https://", "").split(":")[0] or "127.0.0.1")
     SERVER_PORT = int(args.ingest_port)
-    # Community Edition: the only supported identity is the per-agent
-    # enrolment key issued by /api/agents/register and stored in config.json.
-    # Legacy `--license <KEY>` shared-secret mode was removed in v1.0.
     LICENSE_KEY = cfg.get("agent_key")
 
     if not AGENT_NAME:
@@ -1485,12 +1348,8 @@ def main():
     AUTOMATIONS_API_URL = args.api or cfg.get("server_url") or os.getenv("AUTOMATIONS_API_URL", f"http://{SERVER_IP}:8000")
     AUTOMATIONS_MODE = (args.automations_mode or "auto").lower()
 
-    # Bootstrap the Fernet key through the server's /api/agents/bootstrap
-    # endpoint — authenticated by the per-agent key from config.json. No
-    # external license server involved.
     _init_license_via_server(cfg["server_url"], cfg["agent_key"])
 
-    # Başlık
     print(f"[*] Agent Name: {AGENT_NAME}")
     print(f"[*] Server IP: {SERVER_IP}")
     print(f"[*] Ingest Port: {SERVER_PORT}")
@@ -1531,5 +1390,5 @@ if __name__ == "__main__":
         single_process=True,
         workers=1,
         access_log=False,
-        auto_reload=False  # Bu da ekstra güvenlik için
+        auto_reload=False
     )

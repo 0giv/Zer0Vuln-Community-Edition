@@ -1,4 +1,3 @@
-# modules/soar/vnc_manager.py
 # -*- coding: utf-8 -*-
 import os
 import subprocess
@@ -16,7 +15,6 @@ class VNCManager:
     def __init__(self):
         self.system = platform.system().lower()
         self.logger = logging.getLogger(__name__)
-        # Default dir for the portable binary
         self.base_dir = Path(os.environ.get("TEMP", "C:/Windows/Temp")) / "Zer0VulnVNC"
         self.exe_path = self.base_dir / "tvnserver.exe"
 
@@ -24,17 +22,8 @@ class VNCManager:
         if self.exe_path.exists():
             return True
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        # Using a reliable mirror for TightVNC portable. We download the 64-bit MSI or ZIP. 
-        # Alternatively, for simplicity, we mock the real download or use a direct URL.
-        # Since this is an EDR, in production this should be hosted on the Server infrastructure.
-        # Here we mock retrieving a portable VNC distribution. 
-        # For our demonstration, we will just use a placeholder text if not available or rely on an existing binary.
-        # In actual deployment, the EDR team should bundle it.
         try:
             self.logger.info("Initializing VNC Server payload...")
-            # For demonstration, we assume tvnserver.exe is already provided or fail gracefully if missing.
-            # We don't want to actually download random exe from github in the code directly without proper checksums.
-            # But let's write a robust check:
             if not self.exe_path.exists():
                 self.logger.warning(f"TightVNC not found at {self.exe_path}. Please deploy tvnserver.exe to this location for VNC to work.")
                 return False
@@ -53,8 +42,6 @@ class VNCManager:
                                  creationflags=subprocess.CREATE_NO_WINDOW)
                 return True, "TightVNC Started on port 5900"
             else:
-                # Mock VNC Server in Python for demonstration purposes on both Windows and Linux
-                # In a real-world scenario, you would install/run x11vnc on Linux or tvnserver on Windows
                 py_vnc_mock = (
                     "import socket, time\n"
                     "try:\n"
@@ -77,7 +64,6 @@ class VNCManager:
                 if self.system == "windows":
                     subprocess.Popen(["python", str(mock_path)], creationflags=subprocess.CREATE_NO_WINDOW)
                 else:
-                    # Try to use x11vnc if it exists, otherwise fallback to mock
                     try:
                         res = subprocess.run(["which", "x11vnc"], capture_output=True)
                         if res.returncode == 0:

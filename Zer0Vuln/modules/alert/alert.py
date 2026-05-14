@@ -9,12 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from collections import defaultdict, deque
 
-# ────────────────────────────────────────────────────────────────────────────────
-# ENC DB MODÜLÜ AYARLARI
-# ────────────────────────────────────────────────────────────────────────────────
 try:
     import modules.enc_db as enc_db
-    # DB şemasını değiştirmeden mevcut alanları mapliyoruz
     enc_db.set_encrypt_fields_map({
         "siem_events": ["message"],
         "events_alert": ["source", "message"]
@@ -35,11 +31,7 @@ except ImportError:
         @staticmethod
         def set_encrypt_fields_map(m): pass
 
-# ────────────────────────────────────────────────────────────────────────────────
-# KONFİGÜRASYON VE AYARLAR
-# ────────────────────────────────────────────────────────────────────────────────
 
-# DEBUG MODU: True yaparsan her adımı yazar (Sorunu görmek için açtık)
 DEBUG_MODE = False
 
 logging.basicConfig(
@@ -48,12 +40,9 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-# EŞİK DEĞERİ (THRESHOLD)
-# 1=INFO, 2=LOW, 3=MEDIUM, 4=HIGH, 5=CRITICAL
 MIN_ALERT_RANK = 2
 FETCH_LIMIT = 500
 
-# ────────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class AlertContext:
@@ -69,9 +58,6 @@ class AlertContext:
     threat_hits: int
 
 
-# ────────────────────────────────────────────────────────────────────────────────
-# ANA İŞLEM MOTORU
-# ────────────────────────────────────────────────────────────────────────────────
 
 FALSE_POSITIVE_PATTERNS = [
     r"System Idle Process",
@@ -145,7 +131,6 @@ def make_alert_fingerprint(event_type: str, source: str, ip: str) -> str:
     s = f"{event_type}_{source}_{ip}"
     return hashlib.md5(s.encode()).hexdigest()
 
-# Spam Koruması İçin Memory Cache
 recent_alert_fps = deque(maxlen=5000)
 
 def process_alerts() -> int:
@@ -166,7 +151,6 @@ def process_alerts() -> int:
     for row in rows:
         ctx = parse_siem_event(row)
         
-        # A. WHITELIST
         is_whitelisted = False
         for fp_pattern in FALSE_POSITIVE_PATTERNS:
             if re.search(fp_pattern, ctx.message, re.IGNORECASE):
@@ -178,7 +162,6 @@ def process_alerts() -> int:
             processed_ids.append(ctx.row_id)
             continue
 
-        # B. THRESHOLD (EŞİK) KONTROLÜ
         rank = get_rank(ctx.severity)
         if rank < MIN_ALERT_RANK:
             stats["low_rank"] += 1
@@ -187,7 +170,6 @@ def process_alerts() -> int:
                 print(f"[SKIP] Rank too low ({ctx.severity}): {ctx.message[:50]}...")
             continue
 
-        # C. DEDUP (SPAM KORUMASI) - MEMORY CACHE ILE (N+1 SORUNU YERİNE)
         dup_fp = make_alert_fingerprint(ctx.event_type, ctx.source, ctx.ip_address)
         if dup_fp in batch_dup_fps or dup_fp in recent_alert_fps:
             stats["duplicate"] += 1
@@ -197,18 +179,14 @@ def process_alerts() -> int:
         batch_dup_fps.add(dup_fp)
         recent_alert_fps.append(dup_fp)
 
-        # --- ALARM OLUŞTURMA ---
         stats["alerted"] += 1
         risk_score = calculate_risk(ctx.severity)
         
-        # RISK BOOST (Dinamik Skorlama)
-        # Eğer bir log içinde 2 veya daha fazla tehdit eşleşmesi olduysa durumu çok daha kritiktir.
         if ctx.threat_hits >= 2:
             risk_score = 100
             ctx.severity = "CRITICAL"
             ctx.event_type = "COMPOUND_THREAT_DETECTED"
 
-        # IP/User varsa mesajın başına ekle (Okunabilirlik için)
         enriched_msg = ctx.message
         prefixes = []
         if ctx.ip_address: prefixes.append(f"Src:{ctx.ip_address}")
@@ -236,11 +214,9 @@ def process_alerts() -> int:
         alerts_to_insert.append(alert_record)
         processed_ids.append(ctx.row_id)
         
-        # KONSOL ÇIKTISI (RENKLİ)
         icon = "🔴" if risk_score >= 75 else "🟠" if risk_score >= 50 else "🔵"
         print(f"{icon} [ALARM] {ctx.severity} ({risk_score}) | {ctx.event_type} | {ctx.message[:100]}")
 
-    # Toplu Insert
     if alerts_to_insert:
         count = 0
         for alert in alerts_to_insert:
@@ -267,7 +243,6 @@ def main():
     try:
         while True:
             processed = process_alerts()
-            # Veri yoksa 2sn bekle, varsa 0.1sn bekle (Seri çalış)
             sleep_time = 0.1 if processed > 0 else 2
             time.sleep(sleep_time)
             

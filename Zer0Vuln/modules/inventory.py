@@ -29,7 +29,6 @@ def get_installed_software():
     os_type = platform.system().lower()
     
     if os_type == "linux":
-        # Try dpkg (Debian/Ubuntu)
         try:
             res = subprocess.run(["dpkg-query", "-W", "-f=${Package}|${Version}\n"], capture_output=True, text=True, encoding='utf-8', errors='replace')
             if res.returncode == 0:
@@ -40,7 +39,6 @@ def get_installed_software():
         except:
             pass
             
-        # Try rpm (CentOS/RHEL) if dpkg fails
         if not software:
             try:
                 res = subprocess.run(["rpm", "-qa", "--queryformat", "%{NAME}|%{VERSION}\n"], capture_output=True, text=True, encoding='utf-8', errors='replace')
@@ -55,7 +53,6 @@ def get_installed_software():
     elif os_type == "windows":
         try:
             import winreg
-            # Check Registry for installed software (64-bit and 32-bit)
             paths = [
                 r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                 r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
@@ -127,7 +124,6 @@ def scan_inventory():
 
     from .db import delete_record
     
-    # 1. Hardware
     cpu = get_cpu_info()
     ram = get_ram_info()
     gpu = get_gpu_info()
@@ -159,23 +155,21 @@ def scan_inventory():
             })
         except: continue
 
-    # 2. Software
     software_list = get_installed_software()
     for sw in software_list:
         insert_record("software_inventory", {
             "name": sw["name"][:255],
             "version": sw["version"][:100],
-            "vendor": "Unknown", # Could be parsed from registry/dpkg
+            "vendor": "Unknown",
             "install_date": "N/A",
             "timestamp": timestamp,
             "sent": False
         })
 
-    # 3. Network Ports
     ports = get_open_ports()
     for p in ports:
         insert_record("network_inventory", {
-            "protocol": "TCP", # kind='inet' usually means TCP/UDP, but listeners are often TCP
+            "protocol": "TCP",
             "local_address": p["address"],
             "local_port": p["port"],
             "remote_address": "0.0.0.0",

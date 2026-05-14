@@ -56,7 +56,6 @@ def analyze_with_ai(api_key, text, prompt_template, endpoint=None, agent=None):
     prompt = prompt_template.format(log_text=text)
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
 
-    # Check cache first
     if agent:
         cached = get_ai_cache(agent, prompt_hash)
         if cached:
@@ -72,7 +71,6 @@ def analyze_with_ai(api_key, text, prompt_template, endpoint=None, agent=None):
         resp = requests.post(target_url, json=payload, timeout=600)
         if resp.status_code == 200:
             ai_resp = resp.json().get('response', '').strip()
-            # Save to cache
             if agent and ai_resp:
                 set_ai_cache(agent, prompt_hash, ai_resp)
             return ai_resp
@@ -189,7 +187,6 @@ def save_ai_results(agent: str, results: list):
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                # Eski tabloda kolon yoksa ekle (idempotent)
                 try:
                     cursor.execute("ALTER TABLE ai_analysis_results ADD COLUMN source_data LONGTEXT NULL")
                 except Exception:
@@ -209,7 +206,5 @@ def save_ai_results(agent: str, results: list):
                 cursor.close()
         return len(results)
     except Exception as e:
-        # Print AND raise so the worker logger captures it; otherwise dropped
-        # inserts look identical to "no critical findings" in the UI.
         print(f"[!] Error saving AI results for {agent}: {e}", flush=True)
         raise

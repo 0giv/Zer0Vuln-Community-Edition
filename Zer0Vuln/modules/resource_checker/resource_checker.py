@@ -3,10 +3,8 @@ import time
 from datetime import datetime
 from modules.db import insert_record, delete_all
 
-# Helper functions
 def get_cpu_usage():
     try:
-        # First call might return 0.0, use a persistence if needed but here we use interval=None then interval=1
         return psutil.cpu_percent(interval=1)
     except:
         return 0.0
@@ -24,12 +22,10 @@ def get_memory_usage():
         return {"total":0, "available":0, "used":0, "percent":0}
 
 def main():
-    # Warm up psutil
     psutil.cpu_percent(interval=None)
     
     while True:
         try:
-            # Use human readable timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cpu = psutil.cpu_percent(interval=1)
             memory = get_memory_usage()

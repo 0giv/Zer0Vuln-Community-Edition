@@ -14,10 +14,9 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Set
 
-# --- ENC DB KATMANI (ŞİFRELİ YAZIM İÇİN) ---
 import modules.enc_db as enc_db
 enc_db.set_encrypt_fields_map({
-    "siem_events": ["message"]  # gerekirse ["message","ip_address","user"] vb. genişlet
+    "siem_events": ["message"]
 })
 insert_record_enc = enc_db.insert_record_enc
 fetch_where_dec   = enc_db.fetch_where_dec
@@ -29,7 +28,6 @@ default_cfg = os.path.normpath(os.path.join(here, "../../conf/log_paths.yaml"))
 RULES_YAML_PATH = os.path.normpath(os.path.join(here, "../../conf/rules.yaml"))
 PATHS_YAML_PATH = default_cfg
 
-# Import dependencies
 try:
     import yaml
 except Exception:
@@ -48,7 +46,6 @@ except Exception:
     except Exception:
         HAS_JOURNAL = False
 
-# Enhanced configuration structure
 @dataclass
 class SIEMConfig:
     keywords: List[str]
@@ -56,14 +53,13 @@ class SIEMConfig:
     log_paths: Dict[str, List[str]]
     windows_log_types: List[str]
     output: Dict[str, str]
-    rate_limit: int = 1000  # events per minute
+    rate_limit: int = 1000
     buffer_size: int = 10000
     log_rotation: bool = True
-    max_log_size: int = 100 * 1024 * 1024  # 100MB
+    max_log_size: int = 100 * 1024 * 1024
     enable_geoip: bool = False
     enable_enrichment: bool = True
 
-# Enhanced event structure
 @dataclass
 class LogEvent:
     timestamp: str
@@ -84,7 +80,6 @@ DEFAULT_OUTPUT = {
     'file_path': './results/siem_events.log'
 }
 
-# Fallback paths
 FALLBACK_LOG_PATHS = {
     'debian': [
         '/var/log/apache2/error.log',
@@ -111,7 +106,6 @@ FALLBACK_LOG_PATHS = {
 }
 FALLBACK_WINDOWS_LOG_TYPES = ['Security', 'System', 'Application']
 
-# Global event queue
 event_queue = Queue()
 
 class RateLimiter:
@@ -162,7 +156,6 @@ class EventEnricher:
             'hour_of_day': now_dt.hour
         }
 
-        # Varsayılan değerler, kural eşleşmesi sonrası güncellenecek
         return LogEvent(
             timestamp=now_ts,
             source_file=source_file,
@@ -233,7 +226,6 @@ class MetricsCollector:
             stats['events_per_second'] = stats.get('events_processed', 0) / max(runtime, 1)
             return stats
 
-# Utility functions
 def detect_distro():
     try:
         data = open('/etc/os-release', encoding='utf-8', errors='ignore').read().lower()
@@ -298,7 +290,6 @@ def load_rules_from_yaml(path: str):
 
     compiled_rules = []
     
-    # YAML yapısı: categories -> KATEGORI_ADI -> patterns (multiline string)
     categories = data.get('categories', {})
     
     for cat_name, cat_data in categories.items():
@@ -307,12 +298,10 @@ def load_rules_from_yaml(path: str):
         
         for line in raw_patterns.splitlines():
             line = line.strip()
-            # Boş satırları ve yorum satırlarını (#) atla
             if not line or line.startswith('#'):
                 continue
                 
             try:
-                # Regex'i derle
                 regex = re.compile(line, re.IGNORECASE | re.DOTALL)
                 compiled_rules.append({
                     'regex': regex,
@@ -344,12 +333,10 @@ def get_log_paths_from_yaml_or_fallback(cfg_log_paths, distro: str):
             return cfg_log_paths['default']
     return FALLBACK_LOG_PATHS.get(distro, FALLBACK_LOG_PATHS['default'])
 
-# --- DEDUP İÇİN DETERMINISTIK FINGERPRINT ---
 def make_dup_fp_for_event(message: str) -> str:
     msg = (message or "").strip()
     return hashlib.sha256(msg.encode("utf-8")).hexdigest()
 
-# Enhanced file following function
 def enhanced_follow_file(path: str, rules_list: List[Dict],
                         exclude_patterns: List[re.Pattern], enricher: EventEnricher,
                         metrics: MetricsCollector, rate_limiter: RateLimiter,
@@ -383,22 +370,19 @@ def enhanced_follow_file(path: str, rules_list: List[Dict],
                         metrics.increment('rate_limited_events')
                         continue
 
-                    # --- KURAL EŞLEŞTİRME (RULES.YAML) ---
                     matched_rule = None
                     for rule in rules_list:
                         if rule['regex'].search(line):
                             matched_rule = rule
-                            break # İlk eşleşmede çık (Performans)
+                            break
                     
                     if not matched_rule:
-                        continue # Hiçbir kurala uymuyorsa atla
+                        continue
 
-                    # Exclude kontrolü
                     if any(p.search(line) for p in exclude_patterns):
                         metrics.increment('excluded_events')
                         continue
 
-                    # Olayı zenginleştir ve detayları ekle
                     event = enricher.enrich_event(line, path)
                     event.event_type = matched_rule['category']
                     event.severity = matched_rule['severity']
@@ -450,7 +434,6 @@ def enhanced_follow_journal(rules_list: List[Dict], exclude_patterns, enricher: 
                         metrics.increment('rate_limited_events')
                         continue
 
-                    # --- KURAL EŞLEŞTİRME ---
                     matched_rule = None
                     for rule in rules_list:
                         if rule['regex'].search(msg):
@@ -532,11 +515,10 @@ def enhanced_output_worker(output_cfg: Dict, metrics: MetricsCollector,
             if dest in ['db', 'both']:
                 dup_fp = make_dup_fp_for_event(output)
                 if not is_duplicate_event(output):
-                    # ŞİFRELİ YAZIM: message alanı enc_db tarafından şifrelenecek
                     insert_record_enc('siem_events', {
-                        'timestamp': event.timestamp,  # plaintext bırakıyoruz
-                        'message': output,             # ENC MAP'te -> şifrelenecek
-                        'dup_fp': dup_fp               # PLAINTEXT
+                        'timestamp': event.timestamp,
+                        'message': output,
+                        'dup_fp': dup_fp
                     })
 
             metrics.increment('events_output')
@@ -562,7 +544,6 @@ def follow_windows_eventlog(rules_list: List[Dict], exclude_patterns, log_type,
             hand = win32evtlog.OpenEventLog(server, log_type)
             flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
             
-            # Read the latest chunk of events
             events = win32evtlog.ReadEventLog(hand, flags, 0)
             if events:
                 for ev in events:
@@ -570,7 +551,6 @@ def follow_windows_eventlog(rules_list: List[Dict], exclude_patterns, log_type,
                         metrics.increment('rate_limited_events')
                         continue
 
-                    # Extract details
                     eid = ev.EventID & 0xFFFF
                     source = ev.SourceName or "Unknown"
                     category = ev.EventCategory or 0
@@ -579,7 +559,6 @@ def follow_windows_eventlog(rules_list: List[Dict], exclude_patterns, log_type,
                     inserts = ev.StringInserts or []
                     message = ' | '.join(str(i) for i in inserts)
                     
-                    # Human-readable formatting for common security events
                     event_summary = f"[{source}] EID={eid}, Cat={category}"
                     if eid == 4624: event_summary += " | Successful Logon"
                     elif eid == 4625: event_summary += " | Failed Logon"
@@ -590,7 +569,6 @@ def follow_windows_eventlog(rules_list: List[Dict], exclude_patterns, log_type,
                     
                     full_msg = f"{event_summary} | {message}"
 
-                    # --- KURAL EŞLEŞTİRME ---
                     matched_rule = None
                     for rule in rules_list:
                         if rule['regex'].search(full_msg):
@@ -622,7 +600,6 @@ def follow_windows_eventlog(rules_list: List[Dict], exclude_patterns, log_type,
             err_str = str(e)
             if "1314" in err_str:
                 logging.warning(f"Insufficient privileges to read Windows event log {log_type} (requires Admin).")
-                # Wait longer on permission errors to avoid spam
                 time.sleep(60)
             else:
                 logging.error(f"Error reading Windows event log {log_type}: {e}")
@@ -654,14 +631,12 @@ def create_health_check_data(metrics: MetricsCollector) -> Dict:
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-    # Initialize enhanced components
     enricher = EventEnricher()
     rate_limiter = RateLimiter(max_events_per_minute=1000)
     duplicate_filter = DuplicateFilter(window_seconds=300)
     metrics = MetricsCollector()
     log_rotator = LogRotator()
 
-    # --- RULES LOADING ---
     logging.info(f"Loading rules: {RULES_YAML_PATH}")
     rules_list = load_rules_from_yaml(RULES_YAML_PATH)
 
@@ -670,10 +645,8 @@ def main():
     
     exclude_patterns = compile_exclude_patterns(DEFAULT_EXCLUDE_PATTERNS)
 
-    # Load configuration
     y = load_paths_from_yaml(PATHS_YAML_PATH)
 
-    # Start monitoring threads
     distro = detect_distro()
     paths = get_log_paths_from_yaml_or_fallback(y['log_paths'] if y else None, distro)
 
@@ -706,14 +679,12 @@ def main():
                 daemon=True
             ).start()
 
-    # Start output worker
     threading.Thread(
         target=enhanced_output_worker,
         args=(DEFAULT_OUTPUT, metrics, log_rotator),
         daemon=True
     ).start()
 
-    # Start stats reporter
     threading.Thread(
         target=stats_reporter,
         args=(metrics,),

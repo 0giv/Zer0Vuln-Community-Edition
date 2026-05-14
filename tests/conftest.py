@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-# Make the repo root importable so `from ai.utils import ...` works.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
