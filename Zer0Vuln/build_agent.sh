@@ -1,47 +1,106 @@
 #!/usr/bin/env bash
 # Zer0Vuln Agent — PyInstaller build script (Linux)
 #
-# Builds Zer0Vuln/main.py into a single 'main' binary that can be shipped via
-# /api/agent/download/linux and consumed by the token-based installer.
+# Builds Zer0Vuln/main.py into a single 'main' binary that the server ships
+# via /api/agent/download/linux and the token-based installer consumes.
 #
 # Usage:
-#   ./build_agent.sh
+#   ./build_agent.sh                # full clean build
+#   ./build_agent.sh --no-clean     # keep build/ + dist/ + main.spec (faster rebuilds)
+#   ./build_agent.sh --skip-deps    # skip `pip install` — use the current env as-is
+#   ./build_agent.sh -h | --help
 #
 # Output:
-#   Zer0Vuln/main  (one-file bundle)
+#   Zer0Vuln/main                   (one-file bundle, ~22 MB)
+#   Prints SHA-256 so the server-side download endpoint can be verified.
 
 set -euo pipefail
+
+# ───────────────────────── colours ─────────────────────────
+if [ -t 1 ]; then
+    RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+    CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; NC=$'\033[0m'
+else
+    RED=; GREEN=; YELLOW=; CYAN=; BOLD=; NC=
+fi
+
+step() { printf "%s[*]%s %s\n"  "$CYAN"   "$NC" "$*"; }
+ok()   { printf "%s[+]%s %s\n"  "$GREEN"  "$NC" "$*"; }
+warn() { printf "%s[!]%s %s\n"  "$YELLOW" "$NC" "$*"; }
+fail() { printf "%s[x]%s %s\n"  "$RED"    "$NC" "$*" >&2; exit 1; }
+
+usage() {
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+}
+
+# ───────────────────────── args ─────────────────────────
+DO_CLEAN=1
+DO_DEPS=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-clean)  DO_CLEAN=0; shift ;;
+        --skip-deps) DO_DEPS=0;  shift ;;
+        -h|--help)   usage ;;
+        *) fail "Unknown option: $1 (try --help)" ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "[*] Zer0Vuln Agent Builder (Linux / PyInstaller)"
-echo "[*] Working dir: $SCRIPT_DIR"
+printf "%s[*] Zer0Vuln Agent Builder (Linux / PyInstaller)%s\n" "$BOLD" "$NC"
+step "Working dir: $SCRIPT_DIR"
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "[!] python3 not found. Install Python 3.10+ first."
-    exit 1
+# ─────────────────────── prerequisites ───────────────────────
+command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH (need 3.10+)."
+
+PY_VER="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+PY_OK="$(python3 -c 'import sys; print(1 if sys.version_info >= (3,10) else 0)')"
+[ "$PY_OK" = "1" ] || fail "Python $PY_VER is too old — agent requires 3.10+."
+step "Python $PY_VER detected."
+
+[ -f "$SCRIPT_DIR/main.py" ]         || fail "main.py not found in $SCRIPT_DIR."
+[ -d "$SCRIPT_DIR/conf" ]            || fail "conf/ directory missing."
+[ -d "$SCRIPT_DIR/modules" ]         || fail "modules/ directory missing."
+[ -f "$SCRIPT_DIR/requirements.txt" ] || fail "requirements.txt missing."
+
+# ─────────────────────── deps ───────────────────────
+if [ "$DO_DEPS" = "1" ]; then
+    step "Installing pip dependencies..."
+    python3 -m pip install --upgrade --quiet pip
+    python3 -m pip install --quiet -r requirements.txt
+    python3 -m pip install --quiet pyinstaller
+    ok "Dependencies ready."
+else
+    warn "Skipping dependency install (--skip-deps)."
 fi
 
-echo "[*] Ensuring pip dependencies..."
-python3 -m pip install --upgrade pip >/dev/null
-python3 -m pip install -r requirements.txt
-python3 -m pip install pyinstaller
+# ─────────────────────── clean ───────────────────────
+if [ "$DO_CLEAN" = "1" ]; then
+    step "Cleaning previous build artifacts..."
+    rm -rf "$SCRIPT_DIR/build" "$SCRIPT_DIR/dist" "$SCRIPT_DIR/main.spec" "$SCRIPT_DIR/main"
+fi
 
-echo "[*] Cleaning previous build artifacts..."
-rm -rf "$SCRIPT_DIR/build" "$SCRIPT_DIR/dist" "$SCRIPT_DIR/main.spec"
+# ─────────────────────── build ───────────────────────
+# NOTE: absolute paths for --add-data so PyInstaller resolves them against the
+# CWD, not the specpath. The dest;src separator on Linux is `:`.
+#
+# --collect-all pulls package data + hidden submodules + binaries. Required
+# for sanic (tracerite ships style.css as package data), PIL/mss (native
+# libs the static scanner misses), and sanic plugins.
 
-echo "[*] Running PyInstaller..."
-# NOTE: absolute paths for --add-data so PyInstaller resolves them against
-# the CWD (not the specpath). Linux separator is `:`.
+step "Running PyInstaller..."
 python3 -m PyInstaller \
     --onefile \
+    --clean \
+    --noconfirm \
+    --log-level WARN \
     --name main \
     --console \
     --distpath "$SCRIPT_DIR" \
     --workpath "$SCRIPT_DIR/build" \
     --specpath "$SCRIPT_DIR" \
-    --noconfirm \
     --add-data "$SCRIPT_DIR/conf:conf" \
     --add-data "$SCRIPT_DIR/modules:modules" \
     --collect-all sanic \
@@ -73,6 +132,7 @@ python3 -m PyInstaller \
     --hidden-import modules.fim \
     --hidden-import modules.inventory \
     --hidden-import modules.lateral_movement \
+    --hidden-import modules.persistence_hunter \
     --hidden-import modules.log_extractor.log_extractor \
     --hidden-import modules.check_permissions.check_permissions \
     --hidden-import modules.resource_checker.resource_checker \
@@ -83,11 +143,17 @@ python3 -m PyInstaller \
     --hidden-import modules.db \
     "$SCRIPT_DIR/main.py"
 
-if [ -f "main" ]; then
-    size=$(du -h main | cut -f1)
-    echo "[+] Built main ($size)"
-    echo "    Ship it via /api/agent/download/linux (restart the server container to pick it up)."
+# ─────────────────────── verify ───────────────────────
+ARTIFACT="$SCRIPT_DIR/main"
+[ -f "$ARTIFACT" ] || fail "Build failed: '$ARTIFACT' not produced. Inspect PyInstaller output above."
+
+SIZE="$(du -h "$ARTIFACT" | cut -f1)"
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA="$(sha256sum "$ARTIFACT" | cut -d' ' -f1)"
 else
-    echo "[!] Build failed: 'main' not produced."
-    exit 1
+    SHA="$(shasum -a 256 "$ARTIFACT" | cut -d' ' -f1)"
 fi
+
+ok "Built main ($SIZE)"
+printf "    sha256: %s\n" "$SHA"
+printf "    Ship it via /api/agent/download/linux (restart the server container to pick it up).\n"
