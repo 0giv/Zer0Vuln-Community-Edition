@@ -40,10 +40,69 @@ The core SIEM + SOAR + Local AI capability is and will remain open-source.
 
 ---
 
+## Why Zer0Vuln (vs. Wazuh / Elastic SIEM)
+
+Wazuh and Elastic SIEM are excellent log pipelines, but both stop at
+"alerts in a dashboard" and assume an analyst will read, correlate and
+act. Zer0Vuln is built around the opposite assumption: most small teams
+do not have a 24/7 SOC, so the platform itself has to triage and respond.
+
+- **Local LLM triage out of the box.** A bundled Ollama model classifies
+  every event in real time. No SIEM rule writing, no ELK query language,
+  no external AI API key. Wazuh and Elastic both require you to ship
+  events to a separate LLM provider (or buy their AI add-on) to get the
+  same behaviour.
+- **SOAR is in the box, not a separate product.** Visual playbooks plus
+  an autonomous defensive worker that can `BLOCK_IP` / `ISOLATE_HOST` /
+  `KILL_PROCESS` etc. directly on the agent. Elastic's equivalent
+  (Security + Osquery + Fleet + connectors) is a multi-product setup;
+  Wazuh has no native SOAR at all.
+- **One stack, one install.** SIEM, EDR agent, vuln scanner, SOAR and
+  local AI in a single `docker compose up`. No Logstash, no Filebeat, no
+  separate Wazuh manager + indexer + dashboard split.
+- **Air-gap by default.** Local Fernet keys, optional OSV mirror, bundled
+  fonts, no external CDN, no telemetry phone-home. Works fully offline.
+- **AGPL, not "open core".** The triage AI, SOAR engine and agent are all
+  open-source. Paid tier only adds enterprise glue (SSO, multi-tenancy,
+  HA, compliance reports) — never the core detection capability.
+
+Pick Wazuh/Elastic if you already have analysts and want maximum query
+flexibility. Pick Zer0Vuln if you want the box to actually act when
+something bad happens.
+
+---
+
+## System Requirements
+
+The full stack (Ollama + OpenSearch + MySQL + RabbitMQ + 3 AI workers +
+Sanic API + ingest) is heavy. Plan accordingly:
+
+| Tier | CPU | RAM | Disk | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| Minimum (lab / single host, ≤ 5 agents) | 4 cores | **12 GB** | 40 GB SSD | `llama3.2:3b` only; OpenSearch tuned to 1 GB heap. |
+| Recommended (small team, 10–50 agents) | 8 cores | **16 GB** | 100 GB SSD | Default compose settings. Room for log retention. |
+| Production (50+ agents, longer retention) | 16+ cores | **32 GB+** | 250 GB+ NVMe | Consider separating OpenSearch and Ollama onto their own hosts. |
+
+Rough per-service footprint at idle:
+
+- Ollama (`llama3.2:3b`): ~3 GB RAM, spikes higher under inference.
+- OpenSearch: ~2 GB RAM (default heap), disk grows with log volume.
+- MySQL 8.0: ~500 MB–1 GB RAM.
+- RabbitMQ: ~300 MB RAM.
+- Sanic + ingest + 3 AI workers: ~1 GB RAM combined.
+
+Running under 12 GB RAM is possible if you swap to a smaller Ollama
+model (`qwen2.5:1.5b` etc.) and shrink the OpenSearch heap, but expect
+slow triage. A GPU is **not** required — `llama3.2:3b` runs on CPU
+comfortably; if you have one, Ollama will use it automatically.
+
+---
+
 ## Quick Start (Docker Compose)
 
 Prerequisites: Docker 24+ with Compose v2, Python 3.10+ (for the agent
-build step below).
+build step below). See [System Requirements](#system-requirements) above
+before you start — the full stack expects ~16 GB RAM.
 
 ```bash
 git clone https://github.com/0giv/Zer0Vuln-Community-Edition.git
@@ -375,5 +434,6 @@ The following features live in the paid Pro / Enterprise distribution:
 | ServiceNow / Jira ticketing | no | no | yes |
 | Support | community | email 24 h | phone + SLA |
 
-If any of those matter for your deployment, [reach out](#) and we'll
-point you to the commercial offering.
+If any of those matter for your deployment,
+[reach out](mailto:oguzhanbayarslan@gmail.com) and we'll point you to
+the commercial offering.
