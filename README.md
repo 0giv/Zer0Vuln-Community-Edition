@@ -1,6 +1,6 @@
 # Zer0Vuln — Community Edition
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Made with Sanic](https://img.shields.io/badge/built%20with-Sanic-FF7600)](https://sanic.dev/)
 
@@ -11,11 +11,12 @@ classification, and ships an integrated playbook system that can autonomously
 respond to high-confidence threats — all without sending a single byte to a
 third-party AI service.
 
-> This is the **Community Edition** released under Apache 2.0. Pro / Enterprise
+> This is the **Community Edition** released under **AGPL-3.0**. Pro / Enterprise
 > features (multi-tenancy, SAML/SCIM, compliance dashboards, HA, signed
 > air-gap update bundles, premium integrations) live in a separate paid
-> distribution. The core SIEM + SOAR + Local AI capability is and will remain
-> open-source.
+> distribution. If you'd like to use the platform without AGPL's
+> network-copyleft obligations, a commercial licence waiver is available.
+> The core SIEM + SOAR + Local AI capability is and will remain open-source.
 
 ---
 
@@ -252,14 +253,28 @@ For larger features, open an issue first to align on direction.
 
 ## 📜 License
 
-Released under the **Apache License 2.0** — see [LICENSE](LICENSE).
+Released under the **GNU Affero General Public License v3.0** —
+see [LICENSE](LICENSE).
 
-You're free to use, modify, and redistribute Zer0Vuln Community Edition for
-both personal and commercial purposes. The Apache license includes an
-explicit patent grant from contributors. The "Zer0Vuln" name and any
-related logos are trademarks of the project authors and are *not* licensed
-under Apache 2.0 — fork freely, but please rename if you redistribute as
-your own product.
+You're free to use, modify, and redistribute Zer0Vuln Community Edition. The
+key thing AGPL adds on top of regular GPL: **if you run a modified version
+on a network server and let others interact with it, you must offer those
+users the modified source code** under the same licence.
+
+What this means in practice:
+
+- **Self-hosting for internal use:** No source-disclosure obligations — use,
+  modify, and run as you like inside your organisation.
+- **Public-facing SaaS / managed offering:** If you expose a modified
+  Zer0Vuln to external users over a network, you must publish your
+  modifications under AGPL-3.0.
+- **Commercial licence waiver:** Organisations that want to ship a
+  closed-source derivative (or avoid the network-copyleft clause entirely)
+  can obtain a commercial licence from the project authors.
+
+The "Zer0Vuln" name and any related logos are trademarks of the project
+authors and are *not* covered by the AGPL — fork freely, but please rename
+if you redistribute as your own product.
 
 ---
 
