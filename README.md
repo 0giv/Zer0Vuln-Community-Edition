@@ -46,7 +46,7 @@ Prerequisites: Docker 24+ with Compose v2, Python 3.10+ (for the agent
 build step below).
 
 ```bash
-git clone https://github.com/<your-org>/Zer0Vuln-Community-Edition.git
+git clone https://github.com/0giv/Zer0Vuln-Community-Edition.git
 cd Zer0Vuln-Community-Edition
 
 # Create your local env file. Never commit .env.
