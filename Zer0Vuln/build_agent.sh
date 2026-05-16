@@ -190,3 +190,14 @@ fi
 ok "Built main ($SIZE)"
 printf "    sha256: %s\n" "$SHA"
 printf "    Ship it via /api/agent/download/linux (restart the server container to pick it up).\n"
+
+# ─────────────────────── post-build cleanup ───────────────────────
+# Drop the intermediate PyInstaller artifacts so the working tree
+# stays clean. Only ./main is needed downstream. --no-clean preserves
+# everything for faster incremental rebuilds.
+if [ "$DO_CLEAN" = "1" ]; then
+    step "Cleaning intermediate build artifacts..."
+    rm -rf "$SCRIPT_DIR/build" "$SCRIPT_DIR/dist" "$SCRIPT_DIR/main.spec"
+    find "$SCRIPT_DIR" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+    ok "Cleaned build/, dist/, main.spec, __pycache__/."
+fi

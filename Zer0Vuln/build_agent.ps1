@@ -206,3 +206,17 @@ $sha    = (Get-FileHash -Algorithm SHA256 $artifact).Hash.ToLower()
 Write-Ok ("Built main.exe  ({0:N1} MB)" -f $sizeMb)
 Write-Host "    sha256: $sha"
 Write-Host "    Ship it via /api/agent/download/windows (restart the server container to pick it up)."
+
+# ─────────────────────── post-build cleanup ───────────────────────
+# Drop the intermediate PyInstaller artifacts so the working tree
+# stays clean. Only main.exe is needed downstream. -NoClean preserves
+# everything for faster incremental rebuilds.
+if (-not $NoClean) {
+    Write-Step "Cleaning intermediate build artifacts..."
+    Remove-Item -Recurse -Force (Join-Path $ScriptDir "build")     -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force (Join-Path $ScriptDir "dist")      -ErrorAction SilentlyContinue
+    Remove-Item -Force          (Join-Path $ScriptDir "main.spec") -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $ScriptDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Ok "Cleaned build/, dist/, main.spec, __pycache__/."
+}
