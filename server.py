@@ -1,25 +1,18 @@
 import asyncio
 import struct
 import os
-import argparse
-import requests
-import sys
 import mysql.connector
 import json
 import hashlib
 import re
 import time
 from datetime import datetime
-from sanic import Sanic
-from sanic.response import json as sanic_json, text as sanic_text
 from dotenv import load_dotenv
 import pathlib
-import aio_pika
 
 ENV_PATH = pathlib.Path(".env")
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH)
-
 
 
 debug = True
@@ -34,12 +27,6 @@ DB_USER = os.getenv('DB_USER', 'root')
 DB_PASSWORD = os.getenv('DB_PASSWORD', 'my-secret-pw')
 DB_PORT = int(os.getenv('DB_PORT', '3306'))
 
-LICENSE_API_BASE_URL = os.getenv('LICENSE_API_BASE_URL', 'http://host.docker.internal:5099')
-
-
-REQUIRE_LICENSE_HEADER = os.getenv("REQUIRE_LICENSE_HEADER", "true").lower() in ("1", "true", "yes")
-LICENSE_HEADER_NAME    = os.getenv("LICENSE_HEADER_NAME", "X-License-Key")
-
 DEDUP_TABLES = {
     "critical_files", "portscan_result", "packages",
     "vulnerabilities_report", "siem_events", "events_alert", "soar_actions",
@@ -53,14 +40,6 @@ ALLOWED_TABLES = {
     "siem_events", "events_alert", "soar_actions",
     "fim_data", "registry_logs", "network_connections", "process_events", "hardware_inventory", "security_audit", "docker_containers",
     "software_inventory", "network_inventory"
-}
-
-LICENSE_STATE = {
-    "license_key": None,
-    "fernet_key": None,
-    "license_types": [],
-    "expires_at": None,
-    "is_active": False,
 }
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
@@ -206,7 +185,7 @@ import core.opensearch as os_utils
 async def publish_to_ai_queue(agent: str, table: str, item: dict):
     """Publish a log entry to RabbitMQ for both automation and defensive (SOAR) analysis"""
     await mq_utils.publish_to_queue(mq_utils.AI_AUTOMATION, agent, table, item)
-    
+
     if table == "events_alert":
         await mq_utils.publish_to_queue(mq_utils.AI_SOAR, agent, table, item)
         print(f"[AI-Trigger] Published {table} task for {agent} to SOAR (Defensive) queue.")
@@ -269,16 +248,16 @@ async def insert_data(agent: str, table: str, data: list, public_ip: str = None,
                 ai_fp = compute_ai_fingerprint(table, item)
                 now = time.time()
                 cache_key = (agent, table, ai_fp)
-                
+
                 last_time = RECENT_AI_TASKS.get(cache_key, 0)
                 if now - last_time > AI_DEDUP_WINDOW:
                     RECENT_AI_TASKS[cache_key] = now
                     pub_task = asyncio.create_task(publish_to_ai_queue(agent, table, item))
                     print(f"[AI-Trigger] Published {table} task for {agent} to RabbitMQ.")
 
-                    
+
                     if len(RECENT_AI_TASKS) > 1000:
-                        RECENT_AI_TASKS.clear() 
+                        RECENT_AI_TASKS.clear()
 
             asyncio.create_task(os_utils.index_log(agent, table, item))
 
@@ -341,151 +320,16 @@ async def handle_client(reader, writer):
         await writer.wait_closed()
 
 
-def _check_auth_header(request):
-    if not REQUIRE_LICENSE_HEADER:
-        return True
-    provided = request.headers.get(LICENSE_HEADER_NAME)
-    return bool(provided) and provided == LICENSE_STATE.get("license_key")
-
-def _candidate_license_urls(base: str) -> list[tuple[str, str]]:
-    """
-    Denenecek (base, path) ikilileri:
-    - host candidate: verilen base, localhost→127.0.0.1 varyantı
-    - path candidate: /license_status ve /license/status
-    """
-    base = base.rstrip('/')
-    hosts = [base]
-    if 'localhost' in base:
-        hosts.append(base.replace('localhost', '127.0.0.1'))
-    elif '127.0.0.1' in base:
-        hosts.append(base.replace('127.0.0.1', 'localhost'))
-    paths = ['/license_status', '/license/status']
-    out = []
-    for h in hosts:
-        for p in paths:
-            out.append((h, p))
-    seen = set()
-    uniq = []
-    for b, p in out:
-        key = (b, p)
-        if key not in seen:
-            seen.add(key)
-            uniq.append(key)
-    return uniq
-
-def fetch_license_state(license_key: str, retries: int = 3, backoff_sec: float = 0.7) -> bool:
-
-    sess = requests.Session()
-    sess.headers.update({"Connection": "close", "Accept": "application/json"})
-    proxies = {"http": None, "https": None}
-
-    last_err = None
-    cands = _candidate_license_urls(LICENSE_API_BASE_URL)
-    for attempt in range(1, retries + 1):
-        for base, path in cands:
-            try:
-                url = f"{base}{path}"
-                print(f"[*] License check attempt {attempt}/{retries} → {url}")
-                resp = sess.get(
-                    url,
-                    params={"license_key": license_key, "reveal_key": "true"},
-                    timeout=(3.0, 8.0),
-                    allow_redirects=True,
-                    proxies=proxies,
-                )
-                if resp.status_code == 404:
-                    print("[!] License not found (404).")
-                    LICENSE_STATE.update({
-                        "license_key": license_key,
-                        "is_active": False,
-                        "fernet_key": None,
-                        "license_types": [],
-                        "expires_at": None
-                    })
-                    return False
-
-                resp.raise_for_status()
-                data = resp.json() if resp.content else {}
-
-                is_active = bool(data.get("is_active"))
-                types = data.get("license_types") or ([data.get("license_type")] if data.get("license_type") else [])
-
-                LICENSE_STATE.update({
-                    "license_key": license_key,
-                    "is_active": is_active,
-                    "fernet_key": data.get("fernet_key"),
-                    "license_types": [t for t in types if t],
-                    "expires_at": data.get("expires_at")
-                })
-
-                if is_active:
-                    print(f"[*] License OK @ {url} Types={LICENSE_STATE['license_types']} ExpiresAt={LICENSE_STATE['expires_at']}")
-                    if LICENSE_STATE["fernet_key"]:
-                        print("[*] Fernet key received from License API.")
-                    else:
-                        print("[!] License active BUT fernet_key missing (ensure reveal_key=true).")
-                    return True
-                else:
-                    print("[!] License inactive or expired.")
-                    return False
-
-            except requests.exceptions.RequestException as e:
-                last_err = e
-                print(f"[!] License call failed @ {base}{path}: {e}")
-
-        if attempt < retries:
-            time.sleep(backoff_sec * attempt)
-
-    print(f"[!] License validation failed after {retries} attempts: {last_err}")
-    return False
-
-def validate_license_key(license_key: str) -> bool:
-    return fetch_license_state(license_key)
-
-async def periodic_license_check(license_key, interval=600):
-    while True:
-        await asyncio.sleep(interval)
-        print("[+] Checking license validity...")
-        if not fetch_license_state(license_key):
-            print("[-] License invalidated. Shutting down the server.")
-            os._exit(1)
-
-
-
-
-
-async def main(license_key: str):
-    if not validate_license_key(license_key):
-        print("[!] Invalid or inactive license key. Server cannot be started.")
-        sys.exit(1)
-
-
+async def main():
     server = await asyncio.start_server(
         handle_client, SERVER_IP, SERVER_PORT,
         reuse_address=True, reuse_port=False
     )
     addr = server.sockets[0].getsockname()
-    print(f"[*] TCP server listening on: {addr}")
-    print(f"[*] Active license types: {LICENSE_STATE['license_types']}")
-    masked = (LICENSE_STATE['fernet_key'][:6] + '...') if LICENSE_STATE['fernet_key'] else None
-    print(f"[*] Fernet key (masked): {masked}")
-
-    asyncio.create_task(periodic_license_check(license_key))
+    print(f"[*] TCP ingest server listening on: {addr}")
 
     async with server:
         await server.serve_forever()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AsyncIO Agent Data Collector Server")
-    parser.add_argument('-l', '--license', help='License key required to start the server')
-    args = parser.parse_args()
-    
-    license_key = args.license or os.getenv("LICENSE_KEY")
-    
-    if not license_key:
-        print("[!] Error: License key not provided. Use --license or set LICENSE_KEY in .env")
-        sys.exit(1)
-
-    LICENSE_STATE["license_key"] = license_key
-    print(f"[*] Using LICENSE_API_BASE_URL={LICENSE_API_BASE_URL} ")
-    asyncio.run(main(license_key))
+    asyncio.run(main())
