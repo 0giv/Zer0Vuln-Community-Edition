@@ -120,8 +120,7 @@ grouped by surface area.
   via remote `@import`. Inter and Source Code Pro now ship through
   `@fontsource/*` packages and are inlined into Vite's build output.
 - Documented internet dependencies. OTX and VirusTotal are no-ops
-  without API keys; the periodic threat-intel feed is mock data; the
-  license API can run in-stack via `host.docker.internal:5099`.
+  without API keys; the periodic threat-intel feed is mock data.
 
 ### AI pipeline and SOAR autonomy
 
@@ -160,7 +159,7 @@ grouped by surface area.
   `AGENT_MASTER_SECRET` (or legacy `AGENT_SHARED_SECRET`) env, the agent
   accepts any non-empty `X-Agent-Key` and warns. Strict mode kicks
   in as soon as either env is set.
-- Helper `_check_license_header` and `_ws_authorized` unify all three
+- Helper `_check_auth_header` and `_ws_authorized` unify all three
   agent endpoints (`/soar/execute`, `/config/<type>` GET and POST) and
   the new `/screen/ws`. Either a header or a `?key=` query string is
   accepted (browsers cannot set custom headers on a WebSocket upgrade).
@@ -292,7 +291,7 @@ The full task tree lives in `TODO.md` (kept private). Build order below.
      Ollama models
    - `zer0vuln-bundle apply <file>` on the air-gap host
    - Bundles are signed; the server verifies the signature against the
-     customer's enterprise license
+     customer's enterprise tier entitlement
 
 7. SOAR approval workflow (4-eyes)
    - `automations.requires_approval` flag

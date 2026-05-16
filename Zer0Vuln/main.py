@@ -96,7 +96,7 @@ from modules.soar.soar import (
 debug = True
 
 
-def automations_cycle(agent_name: str, api_base: str, license_key: str | None = None, max_batch: int = 25) -> dict:
+def automations_cycle(agent_name: str, api_base: str, max_batch: int = 25) -> dict:
     api = AutomationsClient(api_base, timeout=10)
 
     tasks = api.fetch_pending_tasks(agent_name) or []
@@ -151,7 +151,7 @@ class ServerBootstrapClient:
         self.timeout = timeout
         self.cache = {
             "active": False,
-            "license_type": None,
+            "tier": None,
             "expires_at": None,
             "fernet_key": None,
         }
@@ -168,7 +168,7 @@ class ServerBootstrapClient:
             raise AgentBootstrapError(f"Server bootstrap failed: {data.get('error')}")
         return {
             "is_active": data.get("is_active", True),
-            "license_type": data.get("license_type", "Community"),
+            "tier": data.get("tier", "Community"),
             "expires_at": data.get("expires_at"),
             "fernet_key": data.get("fernet_key"),
         }
@@ -180,7 +180,7 @@ class ServerBootstrapClient:
             raise AgentBootstrapError("Server bootstrap returned no fernet_key.")
         self.cache.update({
             "active": bool(data.get("is_active")),
-            "license_type": data.get("license_type"),
+            "tier": data.get("tier"),
             "expires_at": data.get("expires_at"),
             "fernet_key": fk,
         })
@@ -193,11 +193,11 @@ class ServerBootstrapClient:
                 raise AgentBootstrapError("Server reported inactive bootstrap.")
             self.cache.update({
                 "active": True,
-                "license_type": data.get("license_type") or "Community",
+                "tier": data.get("tier") or "Community",
                 "expires_at": data.get("expires_at"),
                 "fernet_key": data.get("fernet_key"),
             })
-            print(f"[+] Agent bootstrap OK ({self.cache['license_type']})")
+            print(f"[+] Agent bootstrap OK ({self.cache['tier']})")
         except Exception as e:
             print(f"[!] Agent bootstrap failed: {e}")
             sys.exit(1)
@@ -618,7 +618,7 @@ def _exec_local_action(task: dict) -> (bool, str):
         threading.Thread(target=perform_destruction, daemon=True).start()
         return True, "Destruction initiated"
 
-    if ttype == "reload_license":
+    if ttype == "reload_auth":
         try:
             fk = _bootstrap_client.get_fernet_key()
             _apply_fernet_key_to_enc_db(fk)
@@ -708,8 +708,8 @@ async def restart_agent(request):
     return sanic_json({"status": "Agent restart initiated"})
 
 
-@app.post("/reload_license")
-async def reload_license(_):
+@app.post("/reload_auth")
+async def reload_auth(_):
     try:
         fk = _bootstrap_client.get_fernet_key()  # type: ignore
         _apply_fernet_key_to_enc_db(fk)
@@ -871,10 +871,10 @@ def start_threads():
     ).start()
 
 
-def server_automations_loop(agent_name: str, api_base: str, license_key: str | None, interval_sec: int = 5):
+def server_automations_loop(agent_name: str, api_base: str, interval_sec: int = 5):
     while True:
         try:
-            stats = automations_cycle(agent_name, api_base, license_key=license_key, max_batch=25)
+            stats = automations_cycle(agent_name, api_base, max_batch=25)
             if stats.get("executed", 0):
                 print(f"[*] Automations (SERVER): leased={stats.get('leased', 0)} "
                       f"executed={stats.get('executed', 0)} ok={stats.get('ok', 0)} "
@@ -889,7 +889,7 @@ def start_automations_worker():
     if mode == "server":
         threading.Thread(
             target=server_automations_loop,
-            args=(AGENT_NAME, AUTOMATIONS_API_URL, AGENT_SHARED_SECRET, 5),
+            args=(AGENT_NAME, AUTOMATIONS_API_URL, 5),
             daemon=True
         ).start()
     elif mode == "db":
@@ -902,7 +902,7 @@ def start_automations_worker():
         if AUTOMATIONS_API_URL:
             threading.Thread(
                 target=server_automations_loop,
-                args=(AGENT_NAME, AUTOMATIONS_API_URL, AGENT_SHARED_SECRET, 5),
+                args=(AGENT_NAME, AUTOMATIONS_API_URL, 5),
                 daemon=True
             ).start()
         else:
@@ -980,11 +980,11 @@ def _insert_soar_action_local(*, event_id: int | None, action: str, target: str,
 
 
 def _accepted_auth_tokens() -> set:
-    """Both the per-agent enrollment key (AGENT_SHARED_SECRET runtime global, set from
-    cfg.agent_key after registration) AND the server's master license key
-    (env AGENT_MASTER_SECRET / AGENT_SHARED_SECRET) are valid for inbound
-    server→agent calls. Tracking both means the server doesn't need to know
-    which mode the agent is in.
+    """Both the per-agent enrollment key (AGENT_SHARED_SECRET runtime
+    global, set from cfg.agent_key after registration) AND the server's
+    master shared secret (env AGENT_MASTER_SECRET / AGENT_SHARED_SECRET)
+    are valid for inbound server→agent calls. Tracking both means the
+    server doesn't need to know which mode the agent is in.
     """
     keys = set()
     if AGENT_SHARED_SECRET:
@@ -997,11 +997,12 @@ def _accepted_auth_tokens() -> set:
 
 
 def _is_permissive_auth() -> bool:
-    """Permissive mode kicks in when the agent has its own runtime AGENT_SHARED_SECRET
-    (so it knows who IT is) but the operator hasn't propagated the server's
-    master license to this host yet. We accept any non-empty header in that
-    case and log a warning, instead of hard-failing every server→agent call.
-    Setting AGENT_MASTER_SECRET (or AGENT_SHARED_SECRET) on this host disables this.
+    """Permissive mode kicks in when the agent has its own runtime
+    AGENT_SHARED_SECRET (so it knows who IT is) but the operator hasn't
+    propagated the server's master shared secret to this host yet. We
+    accept any non-empty header in that case and log a warning, instead
+    of hard-failing every server→agent call. Setting AGENT_MASTER_SECRET
+    (or AGENT_SHARED_SECRET) on this host disables this.
     """
     if not AGENT_SHARED_SECRET:
         return False

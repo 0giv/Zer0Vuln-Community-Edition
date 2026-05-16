@@ -33,15 +33,11 @@ def set_agent_config(
     refresh_sec: Optional[int] = None,
     **_legacy_kwargs,
 ) -> None:
-    """Configure refresh cadence. Accepts and ignores legacy keyword args
-    (license_key, api_url, header_name, fernet_endpoint_path) so older
-    callers don't break, but no network calls are ever made."""
+    """Configure refresh cadence. Extra keyword args are silently
+    ignored so older callers don't break."""
     global FERNET_REFRESH_SEC
     if refresh_sec is not None:
         FERNET_REFRESH_SEC = max(60, int(refresh_sec))
-
-
-set_license_config = set_agent_config
 
 
 def set_encrypt_fields_map(mapping: Dict[str, List[str]], *, merge: bool = False) -> None:

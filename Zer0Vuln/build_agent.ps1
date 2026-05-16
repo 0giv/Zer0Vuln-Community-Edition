@@ -9,7 +9,7 @@
 #   .\build_agent.ps1 -SkipDeps      # skip `pip install` (use current env as-is)
 #
 # Output:
-#   Zer0Vuln\main.exe                (one-file bundle, ~50 MB)
+#   Zer0Vuln\main.exe                (one-file bundle, ~30-45 MB after excludes)
 #   Prints SHA-256 so the server-side download endpoint can be verified.
 
 [CmdletBinding()]
@@ -98,6 +98,35 @@ $collectAll = @(
     "mss"
 )
 
+# Agent does NOT use any ML / GUI / scientific stack. If the user's
+# global Python env happens to have these installed, PyInstaller will
+# eagerly try to bundle them (and torch in particular triggers a long
+# chain of failing DLL lookups). Exclude them explicitly — keeps the
+# binary lean (~30-45 MB instead of 300 MB) and silences spurious
+# torch / transformers / kivy hook errors.
+$excludeModules = @(
+    # PyTorch family
+    "torch", "torchaudio", "torchvision", "torchtext", "torchdata",
+    # HuggingFace stack (pulls torch as a transitive)
+    "transformers", "tokenizers", "safetensors", "huggingface_hub",
+    "datasets", "accelerate",
+    # Kivy / KivyMD (mobile UI toolkit — totally unrelated to the agent)
+    "kivy", "kivymd",
+    "kivy_deps", "kivy_deps.angle", "kivy_deps.glew", "kivy_deps.sdl2",
+    # Browser automation
+    "playwright",
+    # Scientific stack
+    "scipy", "sklearn", "scikit-learn",
+    # Other ML frameworks
+    "tensorflow", "keras",
+    # Plotting
+    "matplotlib", "seaborn", "plotly",
+    # Notebook stack
+    "jupyter", "IPython", "notebook", "ipykernel", "ipywidgets",
+    # Test runners
+    "pytest", "_pytest"
+)
+
 $hiddenImports = @(
     # third-party
     "cryptography",
@@ -156,6 +185,7 @@ $piArgs = @(
 foreach ($d in $addData)       { $piArgs += @("--add-data",      $d) }
 foreach ($c in $collectAll)    { $piArgs += @("--collect-all",   $c) }
 foreach ($h in $hiddenImports) { $piArgs += @("--hidden-import", $h) }
+foreach ($e in $excludeModules){ $piArgs += @("--exclude-module", $e) }
 $piArgs += (Join-Path $ScriptDir "main.py")
 
 Write-Step "Running PyInstaller..."

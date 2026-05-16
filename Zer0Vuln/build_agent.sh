@@ -11,7 +11,7 @@
 #   ./build_agent.sh -h | --help
 #
 # Output:
-#   Zer0Vuln/main                   (one-file bundle, ~22 MB)
+#   Zer0Vuln/main                   (one-file bundle, ~22-40 MB after excludes)
 #   Prints SHA-256 so the server-side download endpoint can be verified.
 
 set -euo pipefail
@@ -141,6 +141,39 @@ python3 -m PyInstaller \
     --hidden-import modules.soar.vnc_manager \
     --hidden-import modules.enc_db \
     --hidden-import modules.db \
+    --exclude-module torch \
+    --exclude-module torchaudio \
+    --exclude-module torchvision \
+    --exclude-module torchtext \
+    --exclude-module torchdata \
+    --exclude-module transformers \
+    --exclude-module tokenizers \
+    --exclude-module safetensors \
+    --exclude-module huggingface_hub \
+    --exclude-module datasets \
+    --exclude-module accelerate \
+    --exclude-module kivy \
+    --exclude-module kivymd \
+    --exclude-module kivy_deps \
+    --exclude-module kivy_deps.angle \
+    --exclude-module kivy_deps.glew \
+    --exclude-module kivy_deps.sdl2 \
+    --exclude-module playwright \
+    --exclude-module scipy \
+    --exclude-module sklearn \
+    --exclude-module scikit-learn \
+    --exclude-module tensorflow \
+    --exclude-module keras \
+    --exclude-module matplotlib \
+    --exclude-module seaborn \
+    --exclude-module plotly \
+    --exclude-module jupyter \
+    --exclude-module IPython \
+    --exclude-module notebook \
+    --exclude-module ipykernel \
+    --exclude-module ipywidgets \
+    --exclude-module pytest \
+    --exclude-module _pytest \
     "$SCRIPT_DIR/main.py"
 
 # ─────────────────────── verify ───────────────────────

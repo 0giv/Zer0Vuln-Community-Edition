@@ -477,7 +477,7 @@ import io
 @app.get("/api/agent/download/<os_type>")
 async def download_agent(request, os_type):
     user_id = int(request.headers.get("X-User-ID", 0))
-    provided_key = request.headers.get("X-Agent-Key") or request.args.get("license")
+    provided_key = request.headers.get("X-Agent-Key") or request.args.get("key")
     agent_key = request.headers.get("X-Agent-Key") or request.args.get("agent_key")
 
     is_authed = False
@@ -653,7 +653,7 @@ async def _validate_agent_auth(request) -> str | None:
     Also accepts the global AGENT_SHARED_SECRET for backward compat (returns '*')."""
     key = request.headers.get("X-Agent-Key") or request.args.get("agent_key")
     if not key:
-        legacy = request.headers.get("X-Agent-Key") or request.args.get("license")
+        legacy = request.headers.get("X-Agent-Key") or request.args.get("key")
         if legacy and legacy == AGENT_SHARED_SECRET:
             return "*"
         return None
@@ -881,7 +881,7 @@ async def agent_bootstrap(request):
     """Hand the shared Fernet key to a token-enrolled agent.
 
     Community edition: the key is read from the server's local file
-    (FERNET_KEY_PATH) — no proprietary license-server round-trip. The agent
+    (FERNET_KEY_PATH) — no remote auth round-trip. The agent
     authenticates with the per-agent X-Agent-Key issued by
     /api/agents/register.
     """
@@ -911,7 +911,7 @@ async def agent_bootstrap(request):
         "ok": True,
         "fernet_key": fk,
         "is_active": True,
-        "license_type": "Community",
+        "tier": "Community",
         "expires_at": None,
     })
 
@@ -2068,8 +2068,8 @@ class _NoOpBootstrapClient:
         self._fernet_key = None
         self.cache = {
             "active": True,
-            "license_type": "Community",
-            "license_types": ["Community"],
+            "tier": "Community",
+            "tiers": ["Community"],
             "expires_at": None,
             "fernet_key": None,
         }
@@ -4422,8 +4422,8 @@ async def trigger_restart(request, agent):
         return sanic_json({"status": "error", "message": str(e)}, status=500)
 
 @require_permission("manage_agent")
-@app.route("/<agent>/reload_license", methods=["POST"])
-async def trigger_reload_license(request, agent):
+@app.route("/<agent>/reload_auth", methods=["POST"])
+async def trigger_reload_auth(request, agent):
     try:
         if is_soar_enabled():
             resp = await call_agent_soar(agent, "reload_auth", "zer0vuln-agent", comment="Auth reload from UI", background_queue=True)
@@ -4959,7 +4959,7 @@ async def get_compliance_report(request):
                         "checks": {
                             "vulnerabilities": vuln_count,
                             "recent_fim_changes": fim_count,
-                            "license_valid": True 
+                            "valid": True 
                         },
                         "timestamp": datetime.now().isoformat()
                     })
