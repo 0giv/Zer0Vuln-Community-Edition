@@ -135,18 +135,14 @@ def automations_cycle(agent_name: str, api_base: str, license_key: str | None = 
 
 
 
-class LicenseError(Exception):
+class AgentBootstrapError(Exception):
     pass
 
 
 class ServerBootstrapClient:
     """Pulls the shared Fernet key from the main server's /api/agents/bootstrap
-    endpoint, authenticated by the per-agent key issued at enrolment.
-
-    Community Edition: this is the ONLY supported way for the agent to get its
-    encryption key. The old enterprise LicenseClient (which talked to a
-    separate license_api_server) was removed — agents now run with a single,
-    self-contained enrolment flow.
+    endpoint, authenticated by the per-agent key issued at enrolment. This is
+    the only supported way for the agent to acquire its encryption key.
     """
 
     def __init__(self, server_url: str, agent_key: str, timeout: int = 6):
@@ -165,11 +161,11 @@ class ServerBootstrapClient:
         url = f"{self.base_url}/api/agents/bootstrap"
         r = requests.get(url, headers={"X-Agent-Key": self.agent_key}, timeout=self.timeout)
         if r.status_code in (401, 403):
-            raise LicenseError(f"Agent key rejected by server ({r.status_code}).")
+            raise AgentBootstrapError(f"Agent key rejected by server ({r.status_code}).")
         r.raise_for_status()
         data = r.json() or {}
         if not data.get("ok"):
-            raise LicenseError(f"Server bootstrap failed: {data.get('error')}")
+            raise AgentBootstrapError(f"Server bootstrap failed: {data.get('error')}")
         return {
             "is_active": data.get("is_active", True),
             "license_type": data.get("license_type", "Community"),
@@ -181,7 +177,7 @@ class ServerBootstrapClient:
         data = self.status(reveal_key=True)
         fk = data.get("fernet_key")
         if not fk:
-            raise LicenseError("Server bootstrap returned no fernet_key.")
+            raise AgentBootstrapError("Server bootstrap returned no fernet_key.")
         self.cache.update({
             "active": bool(data.get("is_active")),
             "license_type": data.get("license_type"),
@@ -194,7 +190,7 @@ class ServerBootstrapClient:
         try:
             data = self.status(reveal_key=True)
             if not data.get("is_active"):
-                raise LicenseError("Server reported inactive bootstrap.")
+                raise AgentBootstrapError("Server reported inactive bootstrap.")
             self.cache.update({
                 "active": True,
                 "license_type": data.get("license_type") or "Community",
@@ -205,9 +201,6 @@ class ServerBootstrapClient:
         except Exception as e:
             print(f"[!] Agent bootstrap failed: {e}")
             sys.exit(1)
-
-
-LicenseClient = ServerBootstrapClient
 
 
 def _apply_fernet_key_to_enc_db(key: str) -> None:
@@ -257,7 +250,7 @@ def _is_private_ip(ip: str) -> bool:
 
 
 class FernetKeyRefresher(threading.Thread):
-    def __init__(self, client: LicenseClient, refresh_sec: int = 600, daemon: bool = True):
+    def __init__(self, client: ServerBootstrapClient, refresh_sec: int = 600, daemon: bool = True):
         super().__init__(daemon=daemon)
         self.client = client
         self.refresh_sec = max(60, int(refresh_sec))
@@ -286,7 +279,7 @@ SERVER_IP = None
 SERVER_PORT = 5001
 AUTOMATIONS_API_URL = None
 AUTOMATIONS_MODE = "auto"
-LICENSE_KEY = None
+AGENT_SHARED_SECRET = None
 OS_INFO = platform.platform()
 
 _HOSTNAME = ""
@@ -336,7 +329,7 @@ _user_mgr = UserAccountManager(_soar_logger, _executor)
 
 _soar = SOARAutomation(SOARConfig())
 
-_license_client: LicenseClient | None = None
+_bootstrap_client: ServerBootstrapClient | None = None
 _key_refresher: FernetKeyRefresher | None = None
 
 
@@ -627,9 +620,9 @@ def _exec_local_action(task: dict) -> (bool, str):
 
     if ttype == "reload_license":
         try:
-            fk = _license_client.get_fernet_key()
+            fk = _bootstrap_client.get_fernet_key()
             _apply_fernet_key_to_enc_db(fk)
-            return True, "License reloaded"
+            return True, "Auth reloaded"
         except Exception as e:
             return False, str(e)
 
@@ -718,7 +711,7 @@ async def restart_agent(request):
 @app.post("/reload_license")
 async def reload_license(_):
     try:
-        fk = _license_client.get_fernet_key()  # type: ignore
+        fk = _bootstrap_client.get_fernet_key()  # type: ignore
         _apply_fernet_key_to_enc_db(fk)
         return sanic_json({"ok": True, "message": "Fernet key reloaded"})
     except Exception as e:
@@ -748,14 +741,14 @@ def perform_destruction():
 
 
 
-def _init_license_via_server(server_url: str, agent_key: str):
-    global _license_client, _key_refresher
-    _license_client = ServerBootstrapClient(server_url, agent_key)
-    _license_client.validate_or_exit()
-    fk = _license_client.cache.get("fernet_key") or _license_client.get_fernet_key()
+def _init_agent_bootstrap(server_url: str, agent_key: str):
+    global _bootstrap_client, _key_refresher
+    _bootstrap_client = ServerBootstrapClient(server_url, agent_key)
+    _bootstrap_client.validate_or_exit()
+    fk = _bootstrap_client.cache.get("fernet_key") or _bootstrap_client.get_fernet_key()
     _apply_fernet_key_to_enc_db(fk)
     refresh_sec = int(os.getenv("FERNET_REFRESH_SEC", "600"))
-    _key_refresher = FernetKeyRefresher(_license_client, refresh_sec=refresh_sec, daemon=True)
+    _key_refresher = FernetKeyRefresher(_bootstrap_client, refresh_sec=refresh_sec, daemon=True)
     _key_refresher.start()
 
 
@@ -896,7 +889,7 @@ def start_automations_worker():
     if mode == "server":
         threading.Thread(
             target=server_automations_loop,
-            args=(AGENT_NAME, AUTOMATIONS_API_URL, LICENSE_KEY, 5),
+            args=(AGENT_NAME, AUTOMATIONS_API_URL, AGENT_SHARED_SECRET, 5),
             daemon=True
         ).start()
     elif mode == "db":
@@ -909,7 +902,7 @@ def start_automations_worker():
         if AUTOMATIONS_API_URL:
             threading.Thread(
                 target=server_automations_loop,
-                args=(AGENT_NAME, AUTOMATIONS_API_URL, LICENSE_KEY, 5),
+                args=(AGENT_NAME, AUTOMATIONS_API_URL, AGENT_SHARED_SECRET, 5),
                 daemon=True
             ).start()
         else:
@@ -986,17 +979,17 @@ def _insert_soar_action_local(*, event_id: int | None, action: str, target: str,
         return None
 
 
-def _accepted_license_keys() -> set:
-    """Both the per-agent enrollment key (LICENSE_KEY runtime global, set from
+def _accepted_auth_tokens() -> set:
+    """Both the per-agent enrollment key (AGENT_SHARED_SECRET runtime global, set from
     cfg.agent_key after registration) AND the server's master license key
-    (env AGENT_MASTER_LICENSE / LICENSE_KEY) are valid for inbound
+    (env AGENT_MASTER_SECRET / AGENT_SHARED_SECRET) are valid for inbound
     server→agent calls. Tracking both means the server doesn't need to know
     which mode the agent is in.
     """
     keys = set()
-    if LICENSE_KEY:
-        keys.add(LICENSE_KEY)
-    for env_var in ("AGENT_MASTER_LICENSE", "LICENSE_KEY"):
+    if AGENT_SHARED_SECRET:
+        keys.add(AGENT_SHARED_SECRET)
+    for env_var in ("AGENT_MASTER_SECRET", "AGENT_SHARED_SECRET"):
         v = os.getenv(env_var, "").strip()
         if v:
             keys.add(v)
@@ -1004,23 +997,23 @@ def _accepted_license_keys() -> set:
 
 
 def _is_permissive_auth() -> bool:
-    """Permissive mode kicks in when the agent has its own runtime LICENSE_KEY
+    """Permissive mode kicks in when the agent has its own runtime AGENT_SHARED_SECRET
     (so it knows who IT is) but the operator hasn't propagated the server's
     master license to this host yet. We accept any non-empty header in that
     case and log a warning, instead of hard-failing every server→agent call.
-    Setting AGENT_MASTER_LICENSE (or LICENSE_KEY) on this host disables this.
+    Setting AGENT_MASTER_SECRET (or AGENT_SHARED_SECRET) on this host disables this.
     """
-    if not LICENSE_KEY:
+    if not AGENT_SHARED_SECRET:
         return False
-    for env_var in ("AGENT_MASTER_LICENSE", "LICENSE_KEY"):
+    for env_var in ("AGENT_MASTER_SECRET", "AGENT_SHARED_SECRET"):
         if os.getenv(env_var, "").strip():
             return False
     return True
 
 
-def _check_license_header(request) -> bool:
-    srv_key = (request.headers.get("X-License-Key") or "").strip()
-    accepted = _accepted_license_keys()
+def _check_auth_header(request) -> bool:
+    srv_key = (request.headers.get("X-Agent-Key") or "").strip()
+    accepted = _accepted_auth_tokens()
     if accepted and srv_key in accepted:
         return True
     if _is_permissive_auth() and srv_key:
@@ -1028,7 +1021,7 @@ def _check_license_header(request) -> bool:
         print(
             f"[auth] permissive accept — sent={srv_key[:6]}…, "
             f"agent_known={accepted_fps}. "
-            f"Set AGENT_MASTER_LICENSE env on this host to enforce.",
+            f"Set AGENT_MASTER_SECRET env on this host to enforce.",
             flush=True,
         )
         return True
@@ -1040,7 +1033,7 @@ def _check_license_header(request) -> bool:
 
 @app.post("/soar/execute")
 async def soar_execute(request: Request):
-    if not _check_license_header(request):
+    if not _check_auth_header(request):
         return sanic_json({"ok": False, "error": "unauthorized"}, status=401)
 
     data = request.json or {}
@@ -1174,7 +1167,7 @@ async def soar_execute(request: Request):
 
 @app.route("/config/<cfg_type>", methods=["GET"])
 async def get_config(request, cfg_type):
-    if not _check_license_header(request):
+    if not _check_auth_header(request):
         return sanic_json({"ok": False, "error": "unauthorized"}, status=401)
 
     mapping = {
@@ -1196,7 +1189,7 @@ async def get_config(request, cfg_type):
 
 @app.route("/config/<cfg_type>", methods=["POST"])
 async def set_config(request, cfg_type):
-    if not _check_license_header(request):
+    if not _check_auth_header(request):
         return sanic_json({"ok": False, "error": "unauthorized"}, status=401)
 
     mapping = {
@@ -1224,13 +1217,13 @@ async def set_config(request, cfg_type):
 
 
 def _ws_authorized(request) -> bool:
-    """WebSocket-friendly auth: header X-License-Key OR query string ?key=."""
-    if _check_license_header(request):
+    """WebSocket-friendly auth: header X-Agent-Key OR query string ?key=."""
+    if _check_auth_header(request):
         return True
     qkey = (request.args.get("key") or "").strip() if hasattr(request, "args") else ""
     if not qkey:
         return False
-    accepted = _accepted_license_keys()
+    accepted = _accepted_auth_tokens()
     if accepted and qkey in accepted:
         return True
     if _is_permissive_auth() and qkey:
@@ -1303,7 +1296,7 @@ async def screen_stream(request, ws):
 
 
 def main():
-    global AGENT_NAME, SERVER_IP, SERVER_PORT, LICENSE_KEY, AUTOMATIONS_API_URL, AUTOMATIONS_MODE
+    global AGENT_NAME, SERVER_IP, SERVER_PORT, AGENT_SHARED_SECRET, AUTOMATIONS_API_URL, AUTOMATIONS_MODE
 
     if hasattr(signal, 'SIGTERM'):
         try:
@@ -1333,11 +1326,11 @@ def main():
     AGENT_NAME = args.agent or cfg.get("agent_name")
     SERVER_IP = args.server or cfg.get("server_ip") or (cfg.get("server_url", "").replace("http://", "").replace("https://", "").split(":")[0] or "127.0.0.1")
     SERVER_PORT = int(args.ingest_port)
-    LICENSE_KEY = cfg.get("agent_key")
+    AGENT_SHARED_SECRET = cfg.get("agent_key")
 
     if not AGENT_NAME:
         AGENT_NAME = "agent"
-    if not LICENSE_KEY or not cfg.get("server_url"):
+    if not AGENT_SHARED_SECRET or not cfg.get("server_url"):
         print(
             "[!] Missing enrolment config. Run the server installer (deploy.sh / deploy.ps1)\n"
             "    to register this host and produce config.json, then start the agent with\n"
@@ -1348,7 +1341,7 @@ def main():
     AUTOMATIONS_API_URL = args.api or cfg.get("server_url") or os.getenv("AUTOMATIONS_API_URL", f"http://{SERVER_IP}:8000")
     AUTOMATIONS_MODE = (args.automations_mode or "auto").lower()
 
-    _init_license_via_server(cfg["server_url"], cfg["agent_key"])
+    _init_agent_bootstrap(cfg["server_url"], cfg["agent_key"])
 
     print(f"[*] Agent Name: {AGENT_NAME}")
     print(f"[*] Server IP: {SERVER_IP}")

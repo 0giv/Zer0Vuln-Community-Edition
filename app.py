@@ -1,7 +1,6 @@
 from sanic import Sanic
 import bcrypt
 import aiomysql
-import argparse
 import secrets
 import os, pathlib
 import stat
@@ -96,26 +95,16 @@ CORS(app, origins=CORS_ORIGINS)
 app.static("/assets", "./frontend/dist/assets", name="frontend_assets")
 app.static("/vite.svg", "./frontend/dist/vite.svg", name="frontend_logo")
 
-parser = argparse.ArgumentParser(description="App API")
-
 from ai.utils import load_ai_config, is_critical_log, save_ai_results
-parser.add_argument(
-    "-l", "--license",
-    type=str,
-    help="License key (fallback to LICENSE_KEY env var)"
-)
-args = parser.parse_args()
 
-LICENSE_API_URL = ""
-LICENSE_KEY = args.license or os.getenv("LICENSE_KEY", "")
+AGENT_SHARED_SECRET = os.getenv("AGENT_SHARED_SECRET", "") or os.getenv("AGENT_SHARED_SECRET", "")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/api")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
-if not LICENSE_KEY:
-    import secrets as _secrets
-    LICENSE_KEY = _secrets.token_urlsafe(32)
-    print(f"[+] Community edition: generated ephemeral agent shared secret (set LICENSE_KEY in .env to override).")
+if not AGENT_SHARED_SECRET:
+    AGENT_SHARED_SECRET = secrets.token_urlsafe(32)
+    print("[+] Generated ephemeral agent shared secret (set AGENT_SHARED_SECRET in .env to override).")
 
 ENCRYPTED_FIELDS_MAP = {
     "siem_events": ["source", "timestamp", "message"],
@@ -132,7 +121,6 @@ ENCRYPTED_FIELDS_MAP = {
     "security_audit": ["finding", "details"]
 }
 
-SOAR_LICENSED = True
 
 async def init_hub_db():
     """
@@ -354,9 +342,6 @@ async def _execute_automation_record(agent: str, rec: dict) -> dict:
     Returns:
         Execution sonucu detayları
     """
-    if not SOAR_LICENSED:
-        raise RuntimeError("SOAR module not available")
-
     action = rec["action"].strip()
     target = rec["target"].strip()
     event_id = int(rec["event_id"]) if rec.get("event_id") else None
@@ -492,13 +477,13 @@ import io
 @app.get("/api/agent/download/<os_type>")
 async def download_agent(request, os_type):
     user_id = int(request.headers.get("X-User-ID", 0))
-    provided_key = request.headers.get("X-License-Key") or request.args.get("license")
+    provided_key = request.headers.get("X-Agent-Key") or request.args.get("license")
     agent_key = request.headers.get("X-Agent-Key") or request.args.get("agent_key")
 
     is_authed = False
     if user_id and await user_has_permission(user_id, "manage_agent"):
         is_authed = True
-    elif provided_key == LICENSE_KEY:
+    elif provided_key == AGENT_SHARED_SECRET:
         is_authed = True
     elif agent_key:
         try:
@@ -575,7 +560,7 @@ echo [*] Creating Background Runner...
 echo @echo off > run_agent.bat
 echo cd /d "%%~dp0" >> run_agent.bat
 :: Prevent Python from trying to format %%COMPUTERNAME%%, just let batch handle it
-echo "main.exe" -a "Agent-%%COMPUTERNAME%%" -s "{server_ip}" -l "{LICENSE_KEY}" >> run_agent.bat
+echo "main.exe" -a "Agent-%%COMPUTERNAME%%" -s "{server_ip}" >> run_agent.bat
 
 echo [*] Installing Zer0Vuln Agent Background Task...
 set TASK_NAME=Zer0VulnAgent
@@ -624,7 +609,7 @@ Description=Zer0Vuln Agent
 After=network.target docker.service
 
 [Service]
-ExecStart=$(pwd)/main -a "Agent-$(hostname)" -s "{server_ip}" -l "{LICENSE_KEY}"
+ExecStart=$(pwd)/main -a "Agent-$(hostname)" -s "{server_ip}"
 WorkingDirectory=$(pwd)
 Restart=always
 User=root
@@ -665,11 +650,11 @@ def _client_ip(request) -> str:
 
 async def _validate_agent_auth(request) -> str | None:
     """Return agent_name if X-Agent-Key matches a non-revoked identity, else None.
-    Also accepts the global LICENSE_KEY for backward compat (returns '*')."""
+    Also accepts the global AGENT_SHARED_SECRET for backward compat (returns '*')."""
     key = request.headers.get("X-Agent-Key") or request.args.get("agent_key")
     if not key:
-        legacy = request.headers.get("X-License-Key") or request.args.get("license")
-        if legacy and legacy == LICENSE_KEY:
+        legacy = request.headers.get("X-Agent-Key") or request.args.get("license")
+        if legacy and legacy == AGENT_SHARED_SECRET:
             return "*"
         return None
     try:
@@ -687,7 +672,7 @@ async def _validate_agent_auth(request) -> str | None:
                 cur.close()
     except Exception as e:
         print(f"[Enroll] agent auth lookup error: {e}")
-    if key == LICENSE_KEY:
+    if key == AGENT_SHARED_SECRET:
         return "*"
     return None
 
@@ -918,7 +903,7 @@ async def agent_bootstrap(request):
         return sanic_json({"ok": False, "error": "unknown agent_key"}, status=403)
 
     try:
-        fk = await asyncio.to_thread(license_client.get_fernet_key)
+        fk = await asyncio.to_thread(bootstrap_client.get_fernet_key)
     except Exception as e:
         return sanic_json({"ok": False, "error": f"local fernet key load failed: {e}"}, status=500)
 
@@ -1659,7 +1644,7 @@ async def analyze_agent_logs(agent: str, limit: int = 100):
     try:
         key_b64 = getattr(app.ctx, "fernet_key", None)
         if not key_b64:
-            key_b64 = await asyncio.to_thread(license_client.get_fernet_key)
+            key_b64 = await asyncio.to_thread(bootstrap_client.get_fernet_key)
         fernet_obj = Fernet(key_b64.encode("utf-8") if isinstance(key_b64, str) else key_b64)
     except Exception as e:
         return {'success': False, 'error': f'Fernet key error: {e}'}
@@ -1709,7 +1694,7 @@ async def analyze_selected_logs(agent: str, logs: list):
     try:
         key_b64 = getattr(app.ctx, "fernet_key", None)
         if not key_b64:
-            key_b64 = await asyncio.to_thread(license_client.get_fernet_key)
+            key_b64 = await asyncio.to_thread(bootstrap_client.get_fernet_key)
         fernet_obj = Fernet(key_b64.encode("utf-8") if isinstance(key_b64, str) else key_b64)
     except Exception as e:
         return {'success': False, 'error': f'Fernet key error: {e}'}
@@ -2063,17 +2048,16 @@ def load_or_create_fernet_key() -> str:
     return key.decode("utf-8")
 
 
-def fetch_fernet_key_from_license_api(license_api_url: str = "", license_key: str = "",
-                                      header_name: str = "X-License-Key", timeout: int = 6) -> str:
+def get_local_fernet_key(*_, **__) -> str:
     return load_or_create_fernet_key()
 
 
-class LicenseError(Exception):
-    """Kept for legacy `except LicenseError` blocks; never raised in CE."""
+class BootstrapError(Exception):
+    """Kept for legacy `except BootstrapError` blocks; never raised in CE."""
 
 
-class _CommunityLicenseClient:
-    """Drop-in replacement for the old enterprise LicenseClient.
+class _NoOpBootstrapClient:
+    """Drop-in replacement for legacy bootstrap clients.
 
     Community edition: every method is a local-only no-op that returns
     "active community" status. Same shape so legacy callers keep working
@@ -2106,7 +2090,7 @@ class _CommunityLicenseClient:
         print("[+] Zer0Vuln Community Edition — local key initialised.")
 
 
-license_client = _CommunityLicenseClient()
+bootstrap_client = _NoOpBootstrapClient()
 
 
 @app.before_server_start
@@ -2138,8 +2122,8 @@ async def handle_exception(request, exception):
 
 @app.before_server_start
 async def init_local_keys(app):
-    await asyncio.to_thread(license_client.validate_or_exit)
-    app.ctx.fernet_key = license_client.get_fernet_key()
+    await asyncio.to_thread(bootstrap_client.validate_or_exit)
+    app.ctx.fernet_key = bootstrap_client.get_fernet_key()
 
 
 @app.after_server_stop
@@ -2173,21 +2157,17 @@ def decrypt_row_fields(row: dict, encrypted_fields: list, fernet: Fernet) -> dic
 
 async def stream_from_db_dec(table: str, agent: str,
                              connect_db_for_agent,
-                             license_api_url: str,
-                             license_key: str,
                              encrypted_fields: list = None,
-                             header_name: str = "X-License-Key",
                              limit: int = 1000,
                              rename_map: dict = None):
     """
     - connect_db_for_agent: senin mevcut helper'ını kullanır (aynı imza).
-    - license_api_url, license_key: lisans API bilgileri (dosya içinde sabit veya CLI'dan geçirilir).
     - encrypted_fields: o tablonun şifrelenen sütunlarının isim listesi, örn: ["message","path"]
     """
     try:
         key_b64 = getattr(app.ctx, "fernet_key", None)
         if not key_b64:
-            key_b64 = license_client.get_fernet_key()
+            key_b64 = bootstrap_client.get_fernet_key()
         fernet_obj = Fernet(key_b64.encode("utf-8") if isinstance(key_b64, str) else key_b64)
 
         cnx = await connect_db_for_agent(agent)
@@ -2291,9 +2271,7 @@ async def get_server_resources(request):
 async def get_siem_events(request, agent):
     return await stream_from_db_dec(
         "siem_events", agent, connect_db_for_agent,
-        license_api_url=LICENSE_API_URL, 
-        license_key=LICENSE_KEY,
-        encrypted_fields=ENCRYPTED_FIELDS_MAP["siem_events"]
+                encrypted_fields=ENCRYPTED_FIELDS_MAP["siem_events"]
     )
 
 
@@ -2303,39 +2281,37 @@ async def get_siem_events(request, agent):
 async def get_events_alert(request, agent):
     return await stream_from_db_dec(
         "events_alert", agent, connect_db_for_agent,
-        license_api_url=LICENSE_API_URL, license_key=LICENSE_KEY,
-        encrypted_fields=ENCRYPTED_FIELDS_MAP["events_alert"]
+                encrypted_fields=ENCRYPTED_FIELDS_MAP["events_alert"]
     )
 
 @require_permission("read_telemetry")
 @app.route("/api/agent/<agent>/inventory/hardware")
 async def get_hardware_inventory(request, agent):
     fields = ENCRYPTED_FIELDS_MAP.get("hardware_inventory")
-    return await stream_from_db_dec("hardware_inventory", agent, connect_db_for_agent, LICENSE_API_URL, LICENSE_KEY, encrypted_fields=fields)
+    return await stream_from_db_dec("hardware_inventory", agent, connect_db_for_agent, encrypted_fields=fields)
 
 @require_permission("read_telemetry")
 @app.route("/api/agent/<agent>/inventory/software")
 async def get_software_inventory(request, agent):
     fields = ENCRYPTED_FIELDS_MAP.get("packages")
-    return await stream_from_db_dec("packages", agent, connect_db_for_agent, LICENSE_API_URL, LICENSE_KEY, 
-                                   encrypted_fields=fields, rename_map={"package": "name"})
+    return await stream_from_db_dec("packages", agent, connect_db_for_agent,                                    encrypted_fields=fields, rename_map={"package": "name"})
 
 @require_permission("read_telemetry")
 @app.route("/api/agent/<agent>/inventory/network")
 async def get_network_inventory(request, agent):
-    return await stream_from_db_dec("network_connections", agent, connect_db_for_agent, LICENSE_API_URL, LICENSE_KEY)
+    return await stream_from_db_dec("network_connections", agent, connect_db_for_agent)
 
 @require_permission("read_telemetry")
 @app.route("/api/agent/<agent>/fim")
 async def get_fim_data(request, agent):
     fields = ENCRYPTED_FIELDS_MAP.get("fim_data")
-    return await stream_from_db_dec("fim_data", agent, connect_db_for_agent, LICENSE_API_URL, LICENSE_KEY, encrypted_fields=fields)
+    return await stream_from_db_dec("fim_data", agent, connect_db_for_agent, encrypted_fields=fields)
 
 @require_permission("read_telemetry")
 @app.route("/api/agent/<agent>/packages")
 async def get_packages_data(request, agent):
     fields = ENCRYPTED_FIELDS_MAP.get("packages")
-    return await stream_from_db_dec("packages", agent, connect_db_for_agent, LICENSE_API_URL, LICENSE_KEY, encrypted_fields=fields)
+    return await stream_from_db_dec("packages", agent, connect_db_for_agent, encrypted_fields=fields)
 
 @require_permission("role_create")
 @require_permission("manage_users")
@@ -2713,8 +2689,7 @@ async def get_resources(request, agent):
 async def get_critical_files(request, agent):
     return await stream_from_db_dec(
         "critical_files", agent, connect_db_for_agent,
-        license_api_url=LICENSE_API_URL, license_key=LICENSE_KEY,
-        encrypted_fields=ENCRYPTED_FIELDS_MAP["critical_files"]
+                encrypted_fields=ENCRYPTED_FIELDS_MAP["critical_files"]
     )
 
 
@@ -2728,8 +2703,7 @@ async def get_disk_usage(request, agent):
 async def get_vulnerabilities_report(request, agent):
     return await stream_from_db_dec(
         "vulnerabilities_report", agent, connect_db_for_agent,
-        license_api_url=LICENSE_API_URL, license_key=LICENSE_KEY,
-        encrypted_fields=ENCRYPTED_FIELDS_MAP["vulnerabilities_report"]
+                encrypted_fields=ENCRYPTED_FIELDS_MAP["vulnerabilities_report"]
     )
 
 @require_permission("read_telemetry")
@@ -2747,8 +2721,7 @@ async def get_agent_info(request, agent):
 async def get_packages(request, agent):
     return await stream_from_db_dec(
         "packages", agent, connect_db_for_agent,
-        license_api_url=LICENSE_API_URL, license_key=LICENSE_KEY,
-        encrypted_fields=ENCRYPTED_FIELDS_MAP["packages"]
+                encrypted_fields=ENCRYPTED_FIELDS_MAP["packages"]
     )
 
 @require_permission("read_telemetry")
@@ -4453,16 +4426,16 @@ async def trigger_restart(request, agent):
 async def trigger_reload_license(request, agent):
     try:
         if is_soar_enabled():
-            resp = await call_agent_soar(agent, "reload_license", "zer0vuln-agent", comment="License reload from UI", background_queue=True)
+            resp = await call_agent_soar(agent, "reload_auth", "zer0vuln-agent", comment="Auth reload from UI", background_queue=True)
             cnx = await connect_db_for_agent(agent)
             cursor = await cnx.cursor()
             await cursor.execute(
                 "INSERT INTO soar_actions (action, target, status, comment) VALUES (%s, %s, %s, %s)",
-                ("reload_license", "zer0vuln-agent", "SUCCESS" if resp.get("ok") else "FAILED", "License reload from UI")
+                ("reload_auth", "zer0vuln-agent", "SUCCESS" if resp.get("ok") else "FAILED", "Auth reload from UI")
             )
             await cnx.commit()
             await cursor.close(); await cnx.close()
-            return sanic_json({"status": "success", "message": resp.get("message", "License reload command processed")})
+            return sanic_json({"status": "success", "message": resp.get("message", "Auth reload command processed")})
         return sanic_json({"status": "error", "message": "SOAR is disabled, cannot queue action"}, status=400)
     except Exception as e:
         return sanic_json({"status": "error", "message": str(e)}, status=500)
@@ -4888,7 +4861,7 @@ async def periodic_vuln_scan():
     await asyncio.to_thread(resolve_osv_endpoint)
     while True:
         try:
-            key_b64 = getattr(app.ctx, "fernet_key", None) or license_client.get_fernet_key()
+            key_b64 = getattr(app.ctx, "fernet_key", None) or bootstrap_client.get_fernet_key()
             print("[VulnScanner] starting cycle...", flush=True)
             stats = await scan_all_agents(key_b64, connect_db_for_agent, _list_agent_names_sync)
             total_inserted = sum(s.get("inserted", 0) for s in stats)
@@ -4907,7 +4880,7 @@ async def trigger_agent_vuln_scan(request, agent):
         if _vs._OSV_BASE is None:
             await asyncio.to_thread(_vs.resolve_osv_endpoint)
         scan_agent = _vs.scan_agent
-        key_b64 = getattr(app.ctx, "fernet_key", None) or license_client.get_fernet_key()
+        key_b64 = getattr(app.ctx, "fernet_key", None) or bootstrap_client.get_fernet_key()
         stat = await scan_agent(agent, key_b64, connect_db_for_agent)
         return sanic_json({"ok": True, **stat})
     except Exception as e:
@@ -5248,17 +5221,11 @@ async def list_roles(request):
 
 
 async def _get_agent_keys(agent: str) -> list:
-    """Return the candidate `X-License-Key` values to try for outbound
-    server→agent calls. Order: enrolled per-agent key first, then the master
-    LICENSE_KEY as fallback. Both are tried because:
-
-    - Token-enrolled agents accept their per-agent key (cfg.agent_key).
-    - Legacy agents started with `--license <master>` accept the master.
-    - Enrolled agents that were *re-launched* with `--license` may also be
-      back on the master key, even though agent_identities still has a row.
-
-    Trying both gracefully covers all three states without needing operators
-    to track which mode each agent runs in.
+    """Return the candidate `X-Agent-Key` values to try for outbound
+    server→agent calls. Order: enrolled per-agent key first, then the
+    master AGENT_SHARED_SECRET as fallback. Trying both covers freshly
+    enrolled agents and agents still on the shared secret without
+    operators tracking which mode each one is in.
     """
     keys: list = []
     try:
@@ -5277,8 +5244,8 @@ async def _get_agent_keys(agent: str) -> list:
             keys.append(row[0])
     except Exception as e:
         print(f"[!] _get_agent_keys lookup failed for {agent}: {e}", flush=True)
-    if LICENSE_KEY and LICENSE_KEY not in keys:
-        keys.append(LICENSE_KEY)
+    if AGENT_SHARED_SECRET and AGENT_SHARED_SECRET not in keys:
+        keys.append(AGENT_SHARED_SECRET)
     return keys
 
 
@@ -5287,13 +5254,13 @@ def _try_agent_request(method: str, url: str, keys: list, json_body=None, timeou
     401 unauthorized. Returns the first non-401 response (success or other error).
 
     Logs which key fingerprint matched/failed so operators can diagnose stale
-    agent_identities rows, mismatched master LICENSE_KEY env, etc.
+    agent_identities rows, mismatched master AGENT_SHARED_SECRET env, etc.
     """
     last_resp = None
     candidates = list(keys) if keys else [""]
     for idx, k in enumerate(candidates):
         kfp = (k[:6] + "…") if k else "<empty>"
-        headers = {"X-License-Key": k}
+        headers = {"X-Agent-Key": k}
         if method.upper() == "GET":
             resp = requests.get(url, headers=headers, timeout=timeout)
         else:

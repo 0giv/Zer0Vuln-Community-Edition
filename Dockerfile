@@ -38,7 +38,6 @@ COPY --from=frontend-builder /build/dist /app/frontend/dist
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV VITE_API_BASE_URL=""
-ENV LICENSE_KEY=""
 ENV CORS_ORIGINS="*"
 
 # Expose Sanic port

@@ -80,13 +80,13 @@ remain unchanged.
   `agent_key` and an `agent_identities` row. Generates pre-baked
   installer payloads (`deploy.sh`, `deploy.ps1`).
 - Resilient Server-to-Agent Auth. Outbound calls (`/config/*`,
-  `/soar/execute`) try multiple `X-License-Key` candidates: first the
+  `/soar/execute`) try multiple `X-Agent-Key` candidates: first the
   enrolled agent key from `agent_identities`, then the server's master
-  `LICENSE_KEY`. Each attempt logs a fingerprint
+  `AGENT_SHARED_SECRET`. Each attempt logs a fingerprint
   (`[agent-proxy] ... 401 with key#N (xxxxxx...)`) so mismatches are
   diagnosable.
 - Agent Permissive-Auth Fallback. When the agent host has no
-  `AGENT_MASTER_LICENSE` (or legacy `LICENSE_KEY`) env, it accepts any
+  `AGENT_MASTER_SECRET` (or legacy `AGENT_SHARED_SECRET`) env, it accepts any
   non-empty header and warns, instead of hard-failing inbound server
   calls. Strict mode kicks in as soon as either env is set.
 - Agent Identity Plumbing. Real `hostname` and primary-NIC `mac_address`
@@ -168,7 +168,7 @@ Browser <--ws--> /vnc-proxy/<agent>  (server)
             agent /screen/ws  --> mss screen capture, Pillow JPEG, binary frame
 ```
 
-- Agent endpoint `/screen/ws`. Auth via `X-License-Key` header or `?key=`
+- Agent endpoint `/screen/ws`. Auth via `X-Agent-Key` header or `?key=`
   query (browsers cannot set custom headers on WS upgrade). Tunable
   params: `?fps=10&q=60&w=1280` (5-30 fps, 20-95 quality, 320-2560 px).
 - Server proxy `/vnc-proxy/<agent>`. Picks the agent's enrolled key from
@@ -311,7 +311,6 @@ Results are reported back via `/automations/<task_id>/report`.
 | Frontend fonts | Bundled locally via `@fontsource/*`. No CDN call. |
 | OSV scanner | `OSV_MODE=auto` probes public, falls back to `OSV_MIRROR_URL` (or no-ops if neither is reachable). `OSV_MODE=mirror` forces internal-only. |
 | Ollama | Runs in the same Compose stack on `:11434`. No external API. |
-| License API | `LICENSE_API_BASE_URL` defaults to `host.docker.internal:5099`. Bring up a local license server alongside. |
 | Threat intel (OTX / VT) | No-op when `OTX_API_KEY` or `VT_API_KEY` is unset. |
 | Periodic threat-intel feed | Currently mock data, no external call. |
 | Build | Image artifacts can be `docker save`d on a connected box and `docker load`ed on the air-gap host. |

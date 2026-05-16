@@ -45,7 +45,7 @@ jobs:
       - name: Run test suite
         env:
           # Stubs so app/* modules import cleanly without a live stack.
-          LICENSE_KEY: ci-shared-secret-1234567890abcdef
+          AGENT_SHARED_SECRET: ci-shared-secret-1234567890abcdef
           DB_HOST: 127.0.0.1
           DB_USER: root
           DB_PASSWORD: ci

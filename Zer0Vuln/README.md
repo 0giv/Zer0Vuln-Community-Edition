@@ -55,9 +55,9 @@ key is fetched on every start and refreshed every `FERNET_REFRESH_SEC`
 seconds (default 600), so rotating it on the server propagates without
 reinstall.
 
-> Community Edition only supports enrolment-based bootstrap. The legacy
-> `--license` CLI mode used by the closed-source Enterprise build has
-> been removed.
+> The agent only supports enrolment-based bootstrap — there is no
+> standalone CLI auth mode. Run the server installer to register the
+> host, then point the agent at the generated `config.json`.
 
 ---
 

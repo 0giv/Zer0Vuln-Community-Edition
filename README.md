@@ -173,9 +173,8 @@ anything beyond `localhost`:
 
 - MySQL `DB_PASSWORD`
 - The default `admin / admin123` UI login
-- `LICENSE_KEY` env (used as the agent shared secret). Auto-generated on
-  first boot if unset; export your own value to keep it stable across
-  restarts.
+- `AGENT_SHARED_SECRET` env (agent auth token). Auto-generated on first
+  boot if unset; export your own value to keep it stable across restarts.
 
 ### Local Fernet keys
 

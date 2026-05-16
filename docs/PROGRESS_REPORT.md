@@ -153,12 +153,12 @@ grouped by surface area.
 
 - Multiple-key probing. The server's outbound proxy (`_get_agent_keys`
   plus `_try_agent_request`) tries the per-agent enrollment key from
-  `agent_identities` first, then the master `LICENSE_KEY`. Each attempt
+  `agent_identities` first, then the master `AGENT_SHARED_SECRET`. Each attempt
   logs a key fingerprint (`[agent-proxy] ... 401 with key#N
   (xxxxxx...)`) so mismatches are diagnosable.
 - Agent permissive-auth fallback. When the agent host has no
-  `AGENT_MASTER_LICENSE` (or legacy `LICENSE_KEY`) env, the agent
-  accepts any non-empty `X-License-Key` and warns. Strict mode kicks
+  `AGENT_MASTER_SECRET` (or legacy `AGENT_SHARED_SECRET`) env, the agent
+  accepts any non-empty `X-Agent-Key` and warns. Strict mode kicks
   in as soon as either env is set.
 - Helper `_check_license_header` and `_ws_authorized` unify all three
   agent endpoints (`/soar/execute`, `/config/<type>` GET and POST) and
@@ -250,12 +250,11 @@ The full task tree lives in `TODO.md` (kept private). Build order below.
 
 ### Build order
 
-1. License tier system (foundation, must land first)
-   - `userdb.license_type` (`community`, `pro`, `enterprise`)
-   - `core/licensing.py` with `current_tier()`, `require_tier()`,
-     feature flags
+1. Paid-tier feature flag system (foundation, must land first)
+   - `userdb.tier` (`community`, `pro`, `enterprise`)
+   - `core/tier.py` with `current_tier()`, `require_tier()`, feature flags
    - `@require_tier("pro")` decorator
-   - JWT-signed license file (verified at boot against a public key
+   - Signed tier entitlement file (verified at boot against a public key
      bundled with the build) so offline operation stays possible
    - UI tier badge and paywall modal component
    - Soft agent-count gate (Community = 10)
