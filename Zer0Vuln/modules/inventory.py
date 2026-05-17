@@ -122,8 +122,6 @@ def scan_inventory():
     """Enhanced scan of hardware, software, and network context."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    from .db import delete_record
-    
     cpu = get_cpu_info()
     ram = get_ram_info()
     gpu = get_gpu_info()

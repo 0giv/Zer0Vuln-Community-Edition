@@ -659,7 +659,13 @@ def main():
                 daemon=True
             ).start()
         else:
-            logging.warning("Log file not found: %s", path)
+            # On Windows the YAML's Linux paths will all miss. That's
+            # expected, not a warning — only log it on platforms where
+            # the path actually should exist.
+            if not IS_WINDOWS:
+                logging.warning("Log file not found: %s", path)
+            else:
+                logging.debug("Skipping non-Windows log path: %s", path)
 
     if IS_WINDOWS:
         log_types = y['windows_log_types'] if (y and y['windows_log_types']) else FALLBACK_WINDOWS_LOG_TYPES

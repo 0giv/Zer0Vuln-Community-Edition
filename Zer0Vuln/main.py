@@ -51,21 +51,21 @@ logging.root.propagate = False
 original_print = builtins.print
 
 def trapped_print(*args, **kwargs):
+    """Route every print() through the logging stack so the message lands
+    in both stderr and agent.log. Without this, prints from main.py go
+    to stdout/stderr which the Windows Scheduled Task does not capture,
+    making the agent appear silent in its own log file."""
     stack = traceback.extract_stack()
-    is_module = False
+    tag = ""
     for frame in reversed(stack[:-1]):
         fname = frame.filename.replace("\\", "/")
         if "/modules/" in fname or "log_extractor" in fname or "fim" in fname:
-            is_module = True
+            tag = "[MODULE] "
             break
         if "main.py" in fname:
             break
-            
-    if is_module:
-        msg = " ".join(map(str, args)).encode('utf-8', 'ignore').decode('utf-8')
-        logging.info(f"[MODULE] {msg}")
-    else:
-        original_print(*args, **kwargs)
+    msg = " ".join(map(str, args)).encode('utf-8', 'ignore').decode('utf-8')
+    logging.info(f"{tag}{msg}")
 
 builtins.print = trapped_print
 
@@ -515,10 +515,9 @@ class AutomationsClient:
     def fetch_pending_tasks(self, agent_name: str):
         candidates = [
             (f"/{agent_name}/automations/pending", None),
-            (f"/agents/{agent_name}/automations/pending", None),
-            ("/automations/pending", {"agent": agent_name}),
-            ("/automations/tasks", {"agent": agent_name, "status": "pending"}),
+            (f"/api/agents/{agent_name}/automations/pending", None),
         ]
+        last_err = None
         for path, params in candidates:
             try:
                 data = self._get_json(path, params=params)
@@ -529,9 +528,14 @@ class AutomationsClient:
                 if isinstance(data, list):
                     return data
             except Exception as e:
-                if debug:
-                    print(f"[!] fetch_pending_tasks failed on {path}: {e}")
-                    continue
+                last_err = e
+                continue
+        # This loop runs every 5s. If *every* candidate path failed we
+        # silently treat that as "no pending tasks" so the agent log
+        # doesn't drown in fetch errors. Set AGENT_DEBUG_AUTOMATIONS=1
+        # in the env when actually diagnosing.
+        if last_err and os.getenv("AGENT_DEBUG_AUTOMATIONS"):
+            print(f"[!] fetch_pending_tasks exhausted all candidates: {last_err}")
         return []
 
     def report_result(self, task_id: str, status: str, output: str = "", metadata: dict = None):
