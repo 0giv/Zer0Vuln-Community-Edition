@@ -1,7 +1,8 @@
 import psutil
 import json
+import platform
 from datetime import datetime
-from modules.db import insert_record, fetch_where, update_record
+from modules.db import insert_record, fetch_where, update_record, delete_all
 
 def bytes_to_gb(byte_value):
     return round(byte_value / (1024**3), 2)
@@ -22,7 +23,23 @@ def send_local_alert(severity, message, metadata=None):
     except Exception as e:
         print(f"[DiskMonitor] Failed to send alert: {e}")
 
+def _iter_partitions():
+    """Cross-platform partition enumeration that survives the Windows
+    `psutil.disk_partitions()` quirks where CD/floppy/removable entries
+    can raise PermissionError just from being listed."""
+    try:
+        return psutil.disk_partitions(all=False)
+    except Exception as e:
+        print(f"[DiskMonitor] disk_partitions(all=False) failed: {e}", flush=True)
+        try:
+            return psutil.disk_partitions(all=True)
+        except Exception as ee:
+            print(f"[DiskMonitor] disk_partitions(all=True) failed: {ee}", flush=True)
+            return []
+
+
 def get_and_save_disk_info():
+    is_windows = platform.system().lower() == 'windows'
     try:
         try:
             existing_rows = fetch_where("disk_usage")
@@ -31,14 +48,25 @@ def get_and_save_disk_info():
             existing_rows = []
         existing_devices = {r['device'] for r in existing_rows}
 
+        try:
+            delete_all('disk_usage')
+        except Exception as e:
+            print(f"[DiskMonitor] delete_all('disk_usage') failed: {e}", flush=True)
+
         current_devices = set()
-        partitions = psutil.disk_partitions()
+        partitions = _iter_partitions()
         ok = 0
         skipped = 0
         for partition in partitions:
             try:
                 device = partition.device
                 mountpoint = partition.mountpoint
+                opts = (partition.opts or '').lower()
+
+                if is_windows and ('cdrom' in opts or not mountpoint):
+                    skipped += 1
+                    continue
+
                 current_devices.add(device)
 
                 usage = psutil.disk_usage(mountpoint)
@@ -59,23 +87,14 @@ def get_and_save_disk_info():
                         {"device": device, "mountpoint": mountpoint, "total_gb": data['total_gb']}
                     )
 
-                match = [r for r in existing_rows if r['device'] == device]
                 try:
-                    if match:
-                        update_record("disk_usage", data, "device = %s", (device,))
-                    else:
-                        insert_record("disk_usage", data)
+                    insert_record("disk_usage", data)
                     ok += 1
-                except Exception as ue:
-                    print(f"[DiskMonitor] upsert failed for {device}: {ue}", flush=True)
-                    try:
-                        insert_record("disk_usage", data)
-                        ok += 1
-                    except Exception as ie:
-                        print(f"[DiskMonitor] insert fallback failed for {device}: {ie}", flush=True)
-                        skipped += 1
+                except Exception as ie:
+                    print(f"[DiskMonitor] insert failed for {device}: {ie}", flush=True)
+                    skipped += 1
 
-            except PermissionError:
+            except (PermissionError, OSError):
                 skipped += 1
                 continue
             except Exception as e:
@@ -84,10 +103,6 @@ def get_and_save_disk_info():
 
         if ok or skipped:
             print(f"[DiskMonitor] cycle: persisted={ok} skipped={skipped} partitions={len(partitions)}", flush=True)
-
-        for old_device in existing_devices:
-            if old_device not in current_devices:
-                pass
 
     except Exception as e:
         print(f"An unexpected error occurred in DiskMonitor: {e}", flush=True)

@@ -112,9 +112,11 @@ QUEUES = {
 
 soar = SOARAutomation(SOARConfig())
 
-async def handle_automation(agent, table, data, api_key, endpoint):
+async def handle_automation(agent, table, data, api_key, endpoint, model=None):
     log_text = json.dumps(data, indent=2)
-    raw = await asyncio.to_thread(analyze_with_ai, api_key, log_text, PROMPTS["automation"], endpoint, agent=agent)
+    raw = await asyncio.to_thread(
+        analyze_with_ai, api_key, log_text, PROMPTS["automation"], endpoint, agent, model,
+    )
 
     verdict = _extract_json(raw) or {}
     v = (verdict.get('verdict') or '').upper()
@@ -149,12 +151,14 @@ async def handle_automation(agent, table, data, api_key, endpoint):
     except Exception as e:
         logger.error(f"[!] Automation save FAILED agent={agent} table={table}: {e}")
 
-async def handle_manual(agent, table, data, api_key, endpoint):
+async def handle_manual(agent, table, data, api_key, endpoint, model=None):
     batch_size = len(data) if isinstance(data, list) else 1
     log_text = json.dumps(data, indent=2, default=str)
     logger.info(f"[*] Manual analysis START agent={agent} table={table} batch={batch_size}")
 
-    raw = await asyncio.to_thread(analyze_with_ai, api_key, log_text, PROMPTS["manual"], endpoint, agent=agent)
+    raw = await asyncio.to_thread(
+        analyze_with_ai, api_key, log_text, PROMPTS["manual"], endpoint, agent, model,
+    )
 
     verdict = _extract_json(raw) or {}
     if verdict:
@@ -200,9 +204,11 @@ AUTONOMOUS_ACTIONS = {
 AUTONOMOUS_ACTION_CONFIDENCE = float(os.getenv("AI_AUTO_ACT_CONF", "0.75"))
 
 
-async def handle_defensive(agent, table, data, api_key, endpoint):
+async def handle_defensive(agent, table, data, api_key, endpoint, model=None):
     log_text = json.dumps(data, indent=2)
-    raw = await asyncio.to_thread(analyze_with_ai, api_key, log_text, PROMPTS["defensive"], endpoint, agent=agent)
+    raw = await asyncio.to_thread(
+        analyze_with_ai, api_key, log_text, PROMPTS["defensive"], endpoint, agent, model,
+    )
 
     verdict = _extract_json(raw) or {}
     v = (verdict.get('verdict') or '').upper()
@@ -269,16 +275,17 @@ async def process_message(message: aio_pika.IncomingMessage):
                     return
 
                 logger.info(f"[*] Starting {WORKER_TYPE} task for agent: {agent}, table: {table}")
-                cfg = await load_ai_config(agent)
+                cfg = await load_ai_config(agent) or {}
                 api_key = cfg.get('api_key', 'ollama')
                 endpoint = cfg.get('endpoint')
+                model = cfg.get('model_name') or cfg.get('model')
 
                 if WORKER_TYPE == "automation":
-                    await handle_automation(agent, table, data, api_key, endpoint)
+                    await handle_automation(agent, table, data, api_key, endpoint, model)
                 elif WORKER_TYPE == "manual":
-                    await handle_manual(agent, table, data, api_key, endpoint)
+                    await handle_manual(agent, table, data, api_key, endpoint, model)
                 elif WORKER_TYPE == "defensive":
-                    await handle_defensive(agent, table, data, api_key, endpoint)
+                    await handle_defensive(agent, table, data, api_key, endpoint, model)
 
                 await asyncio.sleep(0.5)
 

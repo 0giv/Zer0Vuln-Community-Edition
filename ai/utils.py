@@ -9,6 +9,7 @@ from datetime import datetime
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "my-secret-pw")
+USERDB_NAME = os.getenv("USERDB_NAME", "userdb")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/api")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
@@ -28,33 +29,62 @@ def _conn(db_name: str):
             pass
 
 async def load_ai_config(agent: str):
-    """Load AI configuration for a specific agent from the database"""
-    db_name = f"{agent}_db"
+    """Load AI configuration. ai_config lives in userdb (global, not per-agent)."""
+    default_config = {
+        'model_name': OLLAMA_MODEL,
+        'endpoint': OLLAMA_BASE_URL,
+        'api_key': 'ollama',
+    }
     try:
-        with _conn(db_name) as conn:
+        with _conn(USERDB_NAME) as conn:
             cursor = conn.cursor(dictionary=True)
             try:
-                cursor.execute("SELECT * FROM ai_config LIMIT 1")
+                cursor.execute(
+                    "SELECT model_name, endpoint, api_key FROM ai_config "
+                    "ORDER BY updated_at DESC LIMIT 1"
+                )
                 row = cursor.fetchone()
             finally:
                 cursor.close()
+        if not row:
+            return default_config
+        if not row.get('model_name'):
+            row['model_name'] = OLLAMA_MODEL
+        if not row.get('endpoint'):
+            row['endpoint'] = OLLAMA_BASE_URL
+        if not row.get('api_key'):
+            row['api_key'] = 'ollama'
         return row
-    except Exception:
-        return {
-            'model_name': OLLAMA_MODEL,
-            'endpoint': OLLAMA_BASE_URL,
-            'api_key': 'ollama'
-        }
+    except Exception as e:
+        print(f"[!] load_ai_config: falling back to defaults ({e})", flush=True)
+        return default_config
 
-def analyze_with_ai(api_key, text, prompt_template, endpoint=None, agent=None):
-    """Generic AI analysis function for different worker types"""
+def _normalize_ollama_url(endpoint: str) -> str:
+    """Build the /generate URL no matter what the user typed in the config.
+    Accepts: http://host:11434, http://host:11434/, http://host:11434/api,
+    http://host:11434/api/, http://host:11434/api/generate, .../v1/...
+    """
     if not endpoint:
         endpoint = OLLAMA_BASE_URL
+    url = endpoint.strip().rstrip('/')
+    if url.endswith('/generate'):
+        return url
+    if url.endswith('/api'):
+        return f"{url}/generate"
+    return f"{url}/api/generate"
 
-    target_url = f"{endpoint.rstrip('/')}/generate"
-    
+
+def analyze_with_ai(api_key, text, prompt_template, endpoint=None, agent=None, model=None):
+    """Generic AI analysis function for different worker types.
+
+    `model` overrides the global OLLAMA_MODEL when supplied so the model
+    configured in `ai_config` is actually used by the worker.
+    """
+    target_url = _normalize_ollama_url(endpoint)
+    model_name = (model or OLLAMA_MODEL or '').strip() or OLLAMA_MODEL
+
     prompt = prompt_template.format(log_text=text)
-    prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
+    prompt_hash = hashlib.md5(f"{model_name}|{prompt}".encode()).hexdigest()
 
     if agent:
         cached = get_ai_cache(agent, prompt_hash)
@@ -62,9 +92,9 @@ def analyze_with_ai(api_key, text, prompt_template, endpoint=None, agent=None):
             return cached
 
     payload = {
-        "model": OLLAMA_MODEL,
+        "model": model_name,
         "prompt": prompt,
-        "stream": False
+        "stream": False,
     }
 
     try:
@@ -74,8 +104,19 @@ def analyze_with_ai(api_key, text, prompt_template, endpoint=None, agent=None):
             if agent and ai_resp:
                 set_ai_cache(agent, prompt_hash, ai_resp)
             return ai_resp
-        else:
-            return f"Error: AI service returned {resp.status_code}"
+        if resp.status_code == 404:
+            body = (resp.text or '').lower()
+            if 'model' in body and ('not found' in body or 'not exist' in body or 'pull' in body):
+                return (
+                    f"Error: AI model '{model_name}' is not installed on the Ollama "
+                    f"server at {target_url}. Run `ollama pull {model_name}` "
+                    f"or change the model in AI Config."
+                )
+            return (
+                f"Error: AI endpoint not found at {target_url} (HTTP 404). "
+                f"Check OLLAMA_BASE_URL / AI Config endpoint value."
+            )
+        return f"Error: AI service returned {resp.status_code}"
     except Exception as e:
         return f"Error connecting to AI service: {str(e)}"
 

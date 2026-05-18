@@ -181,6 +181,7 @@ const Automations: React.FC = () => {
                 <th style={{ padding: '12px 20px', fontWeight: 600, color: 'var(--text-secondary)' }}>Action</th>
                 <th style={{ padding: '12px 20px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target</th>
                 <th style={{ padding: '12px 20px', fontWeight: 600, color: 'var(--text-secondary)' }}>Status</th>
+                <th style={{ padding: '12px 20px', fontWeight: 600, color: 'var(--text-secondary)' }}>Reason / Detail</th>
                 <th style={{ padding: '12px 20px', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
@@ -205,6 +206,9 @@ const Automations: React.FC = () => {
                   <td style={{ padding: '16px 20px' }}>
                     <StatusBadge status={auto.status} />
                   </td>
+                  <td style={{ padding: '16px 20px', color: 'var(--text-secondary)', fontSize: '0.8125rem', maxWidth: '320px' }}>
+                    <ReasonCell auto={auto} />
+                  </td>
                   <td style={{ padding: '16px 20px', textAlign: 'right' }}>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                       <button onClick={() => handleOpenEdit(auto)} style={{ color: 'var(--text-secondary)' }}><Edit2 size={16} /></button>
@@ -215,7 +219,7 @@ const Automations: React.FC = () => {
               ))}
               {filteredAutomations.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={5} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  <td colSpan={6} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                     <Zap size={48} style={{ opacity: 0.1, marginBottom: '16px', margin: '0 auto' }} />
                     <p>No automations found matching the criteria.</p>
                   </td>
@@ -324,6 +328,29 @@ const FilterButton: React.FC<{ label: string, active: boolean, onClick: () => vo
     {label}
   </button>
 );
+
+const ReasonCell: React.FC<{ auto: any }> = ({ auto }) => {
+  const status = (auto.status || '').toLowerCase();
+  const isFailure = status === 'failed';
+  const text = (auto.last_error || auto.error || auto.comment || '').toString().trim();
+  if (!text) {
+    return <span style={{ opacity: 0.5 }}>—</span>;
+  }
+  return (
+    <div
+      title={text}
+      style={{
+        color: isFailure ? 'var(--accent-color)' : 'var(--text-secondary)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        maxWidth: '320px'
+      }}
+    >
+      {text}
+    </div>
+  );
+};
 
 const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
   const normalized = (status || '').toLowerCase();

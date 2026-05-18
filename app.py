@@ -2246,16 +2246,61 @@ async def stream_from_db(table: str, agent: str, limit: int = 1000):
 
 import psutil
 
+def _server_disk_percent() -> float:
+    """Return the largest disk usage percent across reachable mountpoints.
+
+    We look at every candidate mountpoint and pick the highest non-zero
+    value with non-zero total bytes. This survives the Docker Desktop /
+    WSL2 case where /host_disk maps to an almost-empty WSL VM rootfs and
+    reports 0% even though the real host disk is full.
+    """
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _add(p: str):
+        if p and p not in seen:
+            seen.add(p)
+            candidates.append(p)
+
+    if os.path.exists('/host_disk'):
+        _add('/host_disk')
+    _add('/')
+    _add('C:\\')
+
+    try:
+        for part in psutil.disk_partitions(all=True):
+            opts = (part.opts or '').lower()
+            if any(tag in opts for tag in ('cdrom', 'removable')):
+                continue
+            mp = part.mountpoint or ''
+            if not mp:
+                continue
+            if mp.startswith(('/proc', '/sys', '/dev', '/run')):
+                continue
+            _add(mp)
+    except Exception:
+        pass
+
+    best = 0.0
+    for c in candidates:
+        try:
+            usage = psutil.disk_usage(c)
+            if usage.total <= 0:
+                continue
+            pct = float(usage.percent)
+            if pct > best:
+                best = pct
+        except Exception:
+            continue
+    return best
+
+
 @app.route("/server/resources", methods=["GET"])
 async def get_server_resources(request):
     try:
-        cpu = psutil.cpu_percent(interval=None) 
+        cpu = psutil.cpu_percent(interval=None)
         ram = psutil.virtual_memory().percent
-        disk_path = '/host_disk' if os.path.exists('/host_disk') else '/'
-        try:
-            disk = psutil.disk_usage(disk_path).percent
-        except:
-            disk = 0.0
+        disk = await asyncio.to_thread(_server_disk_percent)
         return sanic_json({
             "status": "success",
             "cpu_usage": cpu,
@@ -4520,11 +4565,40 @@ async def get_pending_automations_for_agent(request, agent):
         rows = await cur.fetchall()
         await cur.close(); await cnx.close()
 
+        def _params_for(action: str, target_raw):
+            params: dict = {"target": target_raw}
+            act = (action or "").strip().lower()
+            if act == "run_cmd":
+                cmd_list = None
+                if isinstance(target_raw, list):
+                    cmd_list = [str(x) for x in target_raw if x not in (None, "")]
+                elif isinstance(target_raw, (str, bytes)):
+                    s = target_raw.decode() if isinstance(target_raw, bytes) else target_raw
+                    s = (s or "").strip()
+                    if s.startswith("[") and s.endswith("]"):
+                        try:
+                            parsed = pyjson.loads(s)
+                            if isinstance(parsed, list):
+                                cmd_list = [str(x) for x in parsed if x not in (None, "")]
+                        except Exception:
+                            cmd_list = None
+                    if cmd_list is None and s:
+                        import shlex
+                        try:
+                            cmd_list = shlex.split(s, posix=False)
+                        except Exception:
+                            cmd_list = [s]
+                params["cmd"] = cmd_list or []
+            return params
+
         tasks = [
             {
                 "id": r["task_id"],
                 "type": r["type"],
-                "params": {"target": r["target"], "comment": r["params_comment"]},
+                "params": {
+                    **_params_for(r["type"], r["target"]),
+                    "comment": r["params_comment"],
+                },
             }
             for r in rows
         ]
@@ -5310,10 +5384,34 @@ async def _get_agent_http_base(agent: str) -> str:
     return f"http://{host}:{agent_port}"
 
 
+def _shape_soar_target(action: str, target):
+    """Normalize a target value into the shape each SOAR action expects.
+
+    run_cmd on the agent requires a non-empty *list* (argv form); everything
+    else takes a single string. Accept strings, lists, or anything stringable
+    and shape consistently.
+    """
+    act = (action or "").strip().lower()
+    if act == "run_cmd":
+        if isinstance(target, list):
+            return [str(x) for x in target if x is not None and str(x) != ""]
+        s = "" if target is None else str(target).strip()
+        if not s:
+            return []
+        import shlex
+        try:
+            return shlex.split(s, posix=False)
+        except Exception:
+            return [s]
+    if isinstance(target, list):
+        return " ".join(str(x) for x in target).strip()
+    return str(target).strip() if target is not None else ""
+
+
 async def call_agent_soar(
     agent: str,
     action: str,
-    target: str,
+    target,
     *,
     comment: str = "",
     event_id: int | None = None,
@@ -5324,17 +5422,19 @@ async def call_agent_soar(
     Server → Agent /soar/execute çağrısı.
     background_queue=True (default) ise, ajan direkt push'u kaçırsa bile polling ile alsın diye DB'ye yazar.
     """
-    
+    target = _shape_soar_target(action, target)
+
     if background_queue:
         try:
             eid = int(event_id) if event_id is not None else 0
+            db_target = pyjson.dumps(target) if isinstance(target, list) else target
             cnx = await connect_db_for_agent(agent)
             cur = await cnx.cursor()
             await cur.execute("""
-                INSERT INTO automations 
+                INSERT INTO automations
                 (device, event_id, action, target, comment, status, `timestamp`, created_at, updated_at)
                 VALUES (%s, %s, %s, %s, %s, 'pending', NOW(), NOW(), NOW())
-            """, (agent, eid, action, target, comment))
+            """, (agent, eid, action, db_target, comment))
             await cnx.commit()
             await cur.close(); await cnx.close()
         except Exception as e:
@@ -6285,13 +6385,23 @@ async def list_playbook_runs(request, agent):
     cnx = await connect_db_for_agent(agent)
     cur = await cnx.cursor()
 
-    sql = "SELECT id, playbook_name, status, started_at, finished_at FROM playbook_runs"
+    sql = "SELECT id, playbook_name, status, started_at, finished_at, last_error FROM playbook_runs"
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += f" ORDER BY id {order} LIMIT %s"
     params.append(limit)
 
-    await cur.execute(sql, tuple(params))
+    try:
+        await cur.execute(sql, tuple(params))
+    except Exception:
+        await cur.close(); await cnx.close()
+        cnx = await connect_db_for_agent(agent)
+        cur = await cnx.cursor()
+        sql_fallback = "SELECT id, playbook_name, status, started_at, finished_at, NULL as last_error FROM playbook_runs"
+        if where:
+            sql_fallback += " WHERE " + " AND ".join(where)
+        sql_fallback += f" ORDER BY id {order} LIMIT %s"
+        await cur.execute(sql_fallback, tuple(params))
     cols = [c[0] for c in cur.description]
     rows = await cur.fetchall()
     await cur.close(); await cnx.close()
@@ -6417,7 +6527,8 @@ async def run_playbook(request, agent, playbook_id):
                 action_name = data.get("action", "")
                 params = data.get("params") or {}
                 target_val = params.get("target") or (next(iter(params.values())) if params else "")
-                r = await call_agent_soar(agent, action_name, str(target_val).strip(), comment=f"playbook#{playbook_id}:{node['id']}")
+                target_for_call = _shape_soar_target(action_name, target_val)
+                r = await call_agent_soar(agent, action_name, target_for_call, comment=f"playbook#{playbook_id}:{node['id']}")
                 timeline.append({"node": node["id"], "type": action_name, "result": r})
                 return
 
@@ -6686,6 +6797,114 @@ async def drop_database(request, db_name):
 
 
 
+@app.websocket("/vnc-proxy/<agent>")
+async def vnc_proxy(request, ws, agent):
+    """Browser ↔ agent VNC/screen relay.
+
+    Registered at module scope (was previously nested under `if __name__ ==
+    "__main__":`) so it survives Sanic worker subprocesses and any embedding
+    that imports app.py instead of running it as the main script.
+    """
+    import websockets
+
+    fps = request.args.get("fps", "10")
+    q = request.args.get("q", "60")
+    w = request.args.get("w", "1280")
+
+    try:
+        base = await _get_agent_http_base(agent)
+        keys = await _get_agent_keys(agent)
+    except Exception as e:
+        print(f"[screen-proxy] resolve {agent} failed: {e}", flush=True)
+        try:
+            await ws.send(pyjson.dumps({"error": "agent_lookup_failed", "detail": str(e)}))
+        except Exception:
+            pass
+        await ws.close()
+        return
+
+    agent_key = (keys[0] if keys else "")
+    target = (base or "").replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
+    if not target:
+        try:
+            await ws.send(pyjson.dumps({"error": "agent_unreachable", "detail": "no base url for agent"}))
+        except Exception:
+            pass
+        await ws.close()
+        return
+
+    target_url = f"{target}/screen/ws?key={agent_key}&fps={fps}&q={q}&w={w}"
+    headers = {"X-Agent-Key": agent_key} if agent_key else None
+
+    try:
+        async with websockets.connect(
+            target_url,
+            max_size=20 * 1024 * 1024,
+            additional_headers=headers,
+            open_timeout=10,
+            ping_interval=20,
+            ping_timeout=20,
+        ) as upstream:
+            async def browser_to_agent():
+                try:
+                    while True:
+                        data = await ws.recv()
+                        if data is None:
+                            break
+                        await upstream.send(data)
+                except Exception:
+                    pass
+
+            async def agent_to_browser():
+                try:
+                    async for data in upstream:
+                        await ws.send(data)
+                except Exception:
+                    pass
+
+            await asyncio.gather(browser_to_agent(), agent_to_browser())
+    except TypeError:
+        try:
+            async with websockets.connect(
+                target_url,
+                max_size=20 * 1024 * 1024,
+                extra_headers=headers,
+                open_timeout=10,
+            ) as upstream:
+                async def b2a():
+                    try:
+                        while True:
+                            data = await ws.recv()
+                            if data is None:
+                                break
+                            await upstream.send(data)
+                    except Exception:
+                        pass
+
+                async def a2b():
+                    try:
+                        async for data in upstream:
+                            await ws.send(data)
+                    except Exception:
+                        pass
+
+                await asyncio.gather(b2a(), a2b())
+        except Exception as e:
+            print(f"[screen-proxy] legacy connect failed → {target_url}: {e}", flush=True)
+            try:
+                await ws.send(pyjson.dumps({"error": "agent_unreachable", "detail": str(e)}))
+            except Exception:
+                pass
+            await ws.close()
+    except Exception as e:
+        print(f"[screen-proxy] connect failed → {target_url}: {e}", flush=True)
+        try:
+            await ws.send(pyjson.dumps({"error": "agent_unreachable", "detail": str(e)}))
+        except Exception:
+            pass
+        await ws.close()
+
+
 if __name__ == "__main__":
     tls_enabled = os.getenv("TLS_ENABLED", "0").lower() in ("1", "true", "yes")
     cert_path = os.getenv("TLS_CERT", os.path.join("certs", "server.crt"))
@@ -6704,49 +6923,9 @@ if __name__ == "__main__":
 
     default_port = "8000"
     port = int(os.getenv("PORT", default_port))
-    
+
     import multiprocessing
     multiprocessing.freeze_support()
-    
-    @app.websocket("/vnc-proxy/<agent>")
-    async def vnc_proxy(request, ws, agent):
-        import websockets
-        base = await _get_agent_http_base(agent)
-        keys = await _get_agent_keys(agent)
-        agent_key = (keys[0] if keys else "")
-        fps = request.args.get("fps", "10")
-        q = request.args.get("q", "60")
-        w = request.args.get("w", "1280")
-        target = base.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
-        target_url = f"{target}/screen/ws?key={agent_key}&fps={fps}&q={q}&w={w}"
-
-        try:
-            async with websockets.connect(target_url, max_size=20 * 1024 * 1024) as upstream:
-                async def browser_to_agent():
-                    try:
-                        while True:
-                            data = await ws.recv()
-                            if data is None:
-                                break
-                            await upstream.send(data)
-                    except Exception:
-                        pass
-
-                async def agent_to_browser():
-                    try:
-                        async for data in upstream:
-                            await ws.send(data)
-                    except Exception:
-                        pass
-
-                await asyncio.gather(browser_to_agent(), agent_to_browser())
-        except Exception as e:
-            print(f"[screen-proxy] connect failed → {target_url}: {e}", flush=True)
-            try:
-                await ws.send(pyjson.dumps({"error": "agent_unreachable", "detail": str(e)}))
-            except Exception:
-                pass
-            await ws.close()
 
 @app.route("/", name="frontend_root")
 async def serve_root(request):

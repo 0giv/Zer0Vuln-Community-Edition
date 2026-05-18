@@ -320,29 +320,53 @@ const Playbooks: React.FC = () => {
               <h3 style={{ fontSize: '1.125rem' }}>Recent Executions</h3>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {runs.map((run, i) => (
-                <div key={run.id || i} style={{ padding: '16px 20px', borderBottom: i < runs.length - 1 ? '1px solid var(--border-color)' : 'none' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{run.playbook_name || `Run #${run.id}`}</span>
-                    <span style={{ 
-                      fontSize: '0.75rem', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '4px',
-                      color: run.status === 'success' || run.status === 'completed' ? 'var(--accent-success)' : 'var(--accent-color)',
-                      textTransform: 'uppercase',
-                      fontWeight: 600
-                    }}>
-                      {run.status === 'success' || run.status === 'completed' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-                      {run.status || 'COMPLETED'}
-                    </span>
+              {runs.map((run, i) => {
+                const failed = !(run.status === 'success' || run.status === 'completed');
+                const reason = (run.last_error || run.error || run.failure_reason || '').toString().trim();
+                return (
+                  <div key={run.id || i} style={{ padding: '16px 20px', borderBottom: i < runs.length - 1 ? '1px solid var(--border-color)' : 'none' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{run.playbook_name || `Run #${run.id}`}</span>
+                      <span style={{
+                        fontSize: '0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        color: failed ? 'var(--accent-color)' : 'var(--accent-success)',
+                        textTransform: 'uppercase',
+                        fontWeight: 600
+                      }}>
+                        {failed ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
+                        {run.status || 'COMPLETED'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      <span>{run.started_at || 'Just now'}</span>
+                      <span>#{run.id}</span>
+                    </div>
+                    {failed && reason && (
+                      <div
+                        title={reason}
+                        style={{
+                          marginTop: '8px',
+                          padding: '8px 10px',
+                          fontSize: '0.75rem',
+                          color: 'var(--accent-color)',
+                          backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                          border: '1px solid rgba(239, 68, 68, 0.2)',
+                          borderRadius: '6px',
+                          fontFamily: 'monospace',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}
+                      >
+                        {reason}
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    <span>{run.started_at || 'Just now'}</span>
-                    <span>#{run.id}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {runs.length === 0 && (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                   <p style={{ fontSize: '0.875rem' }}>No recent executions.</p>

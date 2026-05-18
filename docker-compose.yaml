@@ -40,20 +40,18 @@ services:
           memory: 8G
 
   ollama-init:
-    image: curlimages/curl:8.12.1
+    image: ollama/ollama:latest
     container_name: zer0vuln-ollama-init
     restart: "no"
     depends_on:
       ollama:
         condition: service_healthy
-    entrypoint: [ "/bin/sh", "-c" ]
-    command: |
-      echo "Waiting for Ollama API to be healthy..."
-      echo "Pulling model llama3.2:3b..."
-      curl -v -fsS http://ollama:11434/api/pull \
-        -H "Content-Type: application/json" \
-        -d '{"model":"llama3.2:3b","stream":false}'
-      echo "Model pull completed."
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: [ "/bin/sh" ]
+    command:
+      - "-c"
+      - "echo '[ollama-init] pulling ${OLLAMA_MODEL:-llama3.2:3b}...' && ollama pull ${OLLAMA_MODEL:-llama3.2:3b} && echo '[ollama-init] verifying...' && ollama list && ollama list | grep -F '${OLLAMA_MODEL:-llama3.2:3b}' && echo '[ollama-init] done.'"
 
   app:
     build: .
